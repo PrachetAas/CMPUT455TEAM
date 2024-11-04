@@ -344,10 +344,9 @@ class CommandInterface:
         if total_weight > 0:
             moves = [(x, y, num, round(weight / total_weight, 3)) for x, y, num, weight in moves]
             moves.sort()  # Sort by x, then y, then num
-            result = "= " + " ".join(f"{x} {y} {num} {prob}" for x, y, num, prob in moves)
+            result = " ".join(f"{x} {y} {num} {prob}" for x, y, num, prob in moves)
             print(result)
-        else:
-            print("= no moves available")
+
         return True
     
     #===============================================================================================
