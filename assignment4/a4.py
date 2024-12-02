@@ -35,6 +35,12 @@ class CommandInterface:
         self.board = [[None]]
         self.player = 1
         self.max_genmove_time = 1
+
+        self.transposition_table = {}
+        self.zobrist_table = {}
+        self.hash_value = 0
+        self.eval_cache = {}
+        self.start_time = 0
         signal.signal(signal.SIGALRM, handle_alarm)
 
     # ====================================================================================================================
@@ -111,6 +117,14 @@ class CommandInterface:
         for i in range(m):
             self.board.append([None] * n)
         self.player = 1
+
+        self.zobrist_table = {}
+        self.hash_value = 0
+        self.transposition_table = {}
+        self.history = []
+        
+        # Initialize new Zobrist table
+        self.initialize_zobrist_hash()
         return True
 
     def show(self, args):
@@ -189,6 +203,8 @@ class CommandInterface:
             print("= illegal move: " + " ".join(args) + " " + reason + "\n")
             return False
         self.board[y][x] = num
+        self.update_zobrist_hash(y, x, num)
+        self.history.append((y, x, num))
         if self.player == 1:
             self.player = 2
         else:
@@ -236,8 +252,18 @@ class CommandInterface:
     # ===============================================================================================
     # VVVVVVVVVV Start of Assignment 4 functions. Add/modify as needed. VVVVVVVV
     # ===============================================================================================
+    def initialize_zobrist_hash(self):
+        row_range = len(self.board)
+        col_range = len(self.board[0])
+        for x in range(row_range):
+            for y in range(col_range):
+                self.zobrist_table[(x, y)] = [random.getrandbits(64) for _ in range(2)]
+
+    def update_zobrist_hash(self, x, y, piece):
+        self.hash_value ^= self.zobrist_table[(x, y)][piece]
 
     def genmove(self, args):
+        self.start_time = time.time()
         start_time = time.time()
         try:
             moves = self.get_legal_moves()
@@ -252,6 +278,7 @@ class CommandInterface:
                 current_best_move = None
                 alpha = float('-inf')
                 beta = float('inf')
+                best_score = float('-inf')
 
                 for move in moves:
                     x, y, num = int(move[0]), int(move[1]), int(move[2])
@@ -259,17 +286,20 @@ class CommandInterface:
                     score = self.minimax(depth - 1, False, alpha, beta)
                     self.board[y][x] = None
 
-                    if score > alpha:
-                        alpha = score
+                    if score > best_score:
+                        best_score = score
                         current_best_move = move
+                    alpha = max(alpha, score)
 
                 if current_best_move:
                     best_move = current_best_move
 
                 depth += 1
+                if depth > 4:
+                    break
 
                 # Stop if running out of time
-                if time.time() - start_time > self.max_genmove_time - 0.1:
+                if time.time() - start_time > self.max_genmove_time - 1:
                     break
 
             if best_move:
@@ -285,47 +315,73 @@ class CommandInterface:
         return True
 
     def minimax(self, depth, is_maximizing, alpha, beta):
-        transposition_table = {}
+        if time.time() - self.start_time > self.max_genmove_time - 1.0:
+            raise TimeoutException()
 
         if depth == 0 or len(self.get_legal_moves()) == 0:
             return self.evaluate_board()
 
+        if self.hash_value in self.transposition_table:
+            stored_depth, stored_value, flag = self.transposition_table[self.hash_value]
+            if stored_depth >= depth:
+                if flag == 'exact':
+                    return stored_value
+                elif flag == 'lower' and stored_value >= beta:
+                    return stored_value
+                elif flag == 'upper' and stored_value <= alpha:
+                    return stored_value
+
         #  move ordering to improve alpha-beta pruning efficiency
         moves = self.get_legal_moves()
+        if not moves:  # Add this check
+            return self.evaluate_board()
         moves.sort(key=lambda move: self.evaluate_move_priority(move), reverse=True)
 
-        board_hash = str(self.board)
-        if board_hash in transposition_table:
-            return transposition_table[board_hash]
+        # board_hash = str(self.board)
+        # if board_hash in transposition_table:
+        #     return transposition_table[board_hash]
 
         if is_maximizing:
             max_eval = float('-inf')
             for move in moves:
                 x, y, num = int(move[0]), int(move[1]), int(move[2])
                 self.board[y][x] = num
+                self.update_zobrist_hash(y, x, num)
+
                 eval = self.minimax(depth - 1, False, alpha, beta)
+                self.update_zobrist_hash(y, x, num)
                 self.board[y][x] = None
                 max_eval = max(max_eval, eval)
                 alpha = max(alpha, eval)
                 if beta <= alpha:
+                    self.transposition_table[self.hash_value] = (depth, max_eval, 'lower')
                     break
-            transposition_table[board_hash] = max_eval
+            # transposition_table[board_hash] = max_eval
+            self.transposition_table[self.hash_value] = (depth, max_eval, 'exact')
             return max_eval
         else:
             min_eval = float('inf')
             for move in moves:
                 x, y, num = int(move[0]), int(move[1]), int(move[2])
                 self.board[y][x] = num
+                self.update_zobrist_hash(y, x, num)
                 eval = self.minimax(depth - 1, True, alpha, beta)
+                self.update_zobrist_hash(y, x, num)
                 self.board[y][x] = None
                 min_eval = min(min_eval, eval)
                 beta = min(beta, eval)
                 if beta <= alpha:
+                    self.transposition_table[self.hash_value] = (depth, min_eval, 'upper')
                     break
-            transposition_table[board_hash] = min_eval
+            # transposition_table[board_hash] = min_eval
+            self.transposition_table[self.hash_value] = (depth, min_eval, 'exact')
             return min_eval
 
     def evaluate_board(self):
+        board_str = str(self.board)
+        if board_str in self.eval_cache:
+            return self.eval_cache[board_str]
+        
         score = 0
 
         # Evaluate rows
@@ -366,6 +422,10 @@ class CommandInterface:
                 if row[i] == row[i + 1] and row[i] is not None:
                     score += 3  # Reward two-in-a-row for potential future winning moves
 
+        if self.player != 1:  
+            score = -score
+
+        self.eval_cache[board_str] = score
         return score
 
     def evaluate_balance(self, zeros, ones, total_length):
