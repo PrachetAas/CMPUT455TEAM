@@ -241,149 +241,92 @@ class CommandInterface:
             return float('inf')
         return (node_wins / node_visits) + 1.414 * math.sqrt(math.log(total_visits) / node_visits)
 
-    def simulate_game(self, board, player):
+    def simulate_random_game(self, current_board, current_player):
         """Simulate a random game from the current position."""
-        board = copy.deepcopy(board)
-        current_player = player
-
+        board = copy.deepcopy(current_board)
+        player = current_player
+        
         while True:
             moves = []
             for y in range(len(board)):
                 for x in range(len(board[0])):
                     for num in range(2):
-                        if self.is_legal(x, y, num)[0]:
-                            moves.append((x, y, num))
+                        temp_board = copy.deepcopy(board)
+                        if temp_board[y][x] is None:
+                            temp_board[y][x] = num
+                            legal, _ = self.is_legal(x, y, num)
+                            if legal:
+                                moves.append((x, y, num))
             
             if not moves:
-                return 2 if current_player == 1 else 1  
-                
+                # No legal moves, current player loses
+                return 3 - player
+            
             x, y, num = random.choice(moves)
             board[y][x] = num
-            current_player = 3 - current_player  
+            player = 3 - player
 
-    def mcts_search(self, time_limit):
-        """Perform MCTS search from the current position."""
-        start_time = time.time()
+    def evaluate_move(self, move, simulations=10):
+        """Evaluate a move by running multiple random simulations."""
+        x, y, num = move
+        wins = 0
         
-        states = {}
+        # Create a copy of the current state
+        temp_board = copy.deepcopy(self.board)
+        temp_board[y][x] = num
+        next_player = 3 - self.player
         
-        while time.time() - start_time < time_limit:
-            
-            board = copy.deepcopy(self.board)
-            player = self.player
-            visited_states = []
-            
-           
-            while True:
-
-                state = (tuple(tuple(row) for row in board), player)
-                visited_states.append(state)
+        # Run simulations from the resulting position
+        for _ in range(simulations):
+            winner = self.simulate_random_game(temp_board, next_player)
+            if winner != next_player:  # If the opponent (next_player) loses
+                wins += 1
                 
-                legal_moves = []
-                for y in range(len(board)):
-                    for x in range(len(board[0])):
-                        for num in range(2):
-                            if self.is_legal(x, y, num)[0]:
-                                legal_moves.append((x, y, num))
-                
-                if not legal_moves:
-                    break
-                
-                # If state is new, initialize it and break for simulation
-                if state not in states:
-                    states[state] = (0, 0)
-                    break
-                
-                # Select move using UCT
-                total_visits = states[state][1]
-                selected_move = None
-                best_value = float('-inf')
-                
-                random.shuffle(legal_moves)  # Add randomization to move selection
-                
-                for move in legal_moves:
-                    x, y, num = move
-                    temp_board = copy.deepcopy(board)
-                    temp_board[y][x] = num
-                    next_state = (tuple(tuple(row) for row in temp_board), 3 - player)
-                    
-                    if next_state not in states:
-                        selected_move = move
-                        break
-                    
-                    wins, visits = states[next_state]
-                    uct = self.uct_value(total_visits, wins, visits)
-                    if uct > best_value:
-                        best_value = uct
-                        selected_move = move
-                
-                # Make the selected move
-                x, y, num = selected_move
-                board[y][x] = num
-                player = 3 - player  # Switch player
-            
-            # Simulation
-            winner = self.simulate_game(board, player)
-            
-            # Backpropagation
-            for state in visited_states:
-                if state not in states:
-                    states[state] = (0, 0)
-                wins, visits = states[state]
-                
-                # Update wins and visits
-                visits += 1
-                if winner != state[1]:  # If the player who didn't make the move from this state won
-                    wins += 1
-                states[state] = (wins, visits)
-        
-        # Select best move from root state
-        
-        legal_moves = []
-        best_visits = -1
-        best_move = None
-        
-        for y in range(len(self.board)):
-            for x in range(len(self.board[0])):
-                for num in range(2):
-                    if self.is_legal(x, y, num)[0]:
-                        temp_board = copy.deepcopy(self.board)
-                        temp_board[y][x] = num
-                        next_state = (tuple(tuple(row) for row in temp_board), 3 - self.player)
-                        
-                        if next_state in states:
-                            visits = states[next_state][1]
-                            if visits > best_visits:
-                                best_visits = visits
-                                best_move = (x, y, num)
-        
-        return best_move
+        return wins / simulations
 
     def genmove(self, args):
-        """Generate a move using MCTS."""
         try:
             signal.alarm(self.max_genmove_time)
             
-            # Check if there are any legal moves
-            moves = self.get_legal_moves()
+            # Get all legal moves
+            moves = []
+            for y in range(len(self.board)):
+                for x in range(len(self.board[0])):
+                    for num in range(2):
+                        legal, _ = self.is_legal(x, y, num)
+                        if legal:
+                            moves.append((x, y, num))
+            
             if not moves:
                 print("resign")
                 return True
             
-            # Run MCTS with slightly less time than the limit to account for overhead
-            best_move = self.mcts_search(self.max_genmove_time - 0.1)
+            # Evaluate each move
+            best_move = None
+            best_score = -1
+            
+            # Calculate how many simulations we can do per move
+            time_per_move = (self.max_genmove_time - 0.5) / len(moves)
+            start_time = time.time()
+            simulations_per_move = 30  # Start with a reasonable number
+            
+            for move in moves:
+                if time.time() - start_time > self.max_genmove_time - 0.5:
+                    break
+                
+                score = self.evaluate_move(move, simulations_per_move)
+                if score > best_score:
+                    best_score = score
+                    best_move = move
             
             if best_move is None:
-                # Fallback to random move if MCTS fails
-                moves = self.get_legal_moves()
-                rand_move = moves[random.randint(0, len(moves)-1)]
-                self.play(rand_move)
-                print(" ".join(rand_move))
-            else:
-                # Play the MCTS move
-                move = [str(x) for x in best_move]
-                self.play(move)
-                print(" ".join(move))
+                # Fallback to random move if evaluation fails
+                best_move = random.choice(moves)
+            
+            # Convert move to string format and play it
+            move_str = [str(best_move[0]), str(best_move[1]), str(best_move[2])]
+            self.play(move_str)
+            print(" ".join(move_str))
             
             signal.alarm(0)
             
