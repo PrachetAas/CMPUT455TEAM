@@ -6,6 +6,8 @@ import sys
 import random
 import signal
 import time
+import math
+import numpy as np
 
 
 # Custom time out exception
@@ -252,6 +254,8 @@ class CommandInterface:
     # ===============================================================================================
     # VVVVVVVVVV Start of Assignment 4 functions. Add/modify as needed. VVVVVVVV
     # ===============================================================================================
+
+
     def initialize_zobrist_hash(self):
         row_range = len(self.board)
         col_range = len(self.board[0])
@@ -264,138 +268,45 @@ class CommandInterface:
 
     def genmove(self, args):
         self.start_time = time.time()
-        start_time = time.time()
         try:
             moves = self.get_legal_moves()
             if len(moves) == 0:
                 print("resign")
                 return True
 
-            best_move = None
-            depth = 1
-
-            while True:
-                current_best_move = None
-                alpha = float('-inf')
-                beta = float('inf')
-                best_score = float('-inf')
-
-                for move in moves:
-                    x, y, num = int(move[0]), int(move[1]), int(move[2])
-                    self.board[y][x] = num
-                    score = self.minimax(depth - 1, False, alpha, beta)
-                    self.board[y][x] = None
-
-                    if score > best_score:
-                        best_score = score
-                        current_best_move = move
-                    alpha = max(alpha, score)
-
-                if current_best_move:
-                    best_move = current_best_move
-
-                depth += 1
-                if depth > 4:
-                    break
-
-                # Stop if running out of time
-                if time.time() - start_time > self.max_genmove_time - 1:
-                    break
+            best_move = mcts(self, itermax=1000)  # Adjust itermax for more simulations
 
             if best_move:
-                self.play(best_move)
+                self.perform_move(best_move)
                 print(" ".join(best_move))
             else:
                 rand_move = moves[random.randint(0, len(moves) - 1)]
-                self.play(rand_move)
+                self.perform_move(rand_move)
                 print(" ".join(rand_move))
 
         except TimeoutException:
             print("resign")
         return True
 
-    def minimax(self, depth, is_maximizing, alpha, beta):
-        if time.time() - self.start_time > self.max_genmove_time - 1.0:
-            raise TimeoutException()
-
-        if depth == 0 or len(self.get_legal_moves()) == 0:
-            return self.evaluate_board()
-
-        if self.hash_value in self.transposition_table:
-            stored_depth, stored_value, flag = self.transposition_table[self.hash_value]
-            if stored_depth >= depth:
-                if flag == 'exact':
-                    return stored_value
-                elif flag == 'lower' and stored_value >= beta:
-                    return stored_value
-                elif flag == 'upper' and stored_value <= alpha:
-                    return stored_value
-
-        #  move ordering to improve alpha-beta pruning efficiency
-        moves = self.get_legal_moves()
-        if not moves:  # Add this check
-            return self.evaluate_board()
-        moves.sort(key=lambda move: self.evaluate_move_priority(move), reverse=True)
-
-        # board_hash = str(self.board)
-        # if board_hash in transposition_table:
-        #     return transposition_table[board_hash]
-
-        if is_maximizing:
-            max_eval = float('-inf')
-            for move in moves:
-                x, y, num = int(move[0]), int(move[1]), int(move[2])
-                self.board[y][x] = num
-                self.update_zobrist_hash(y, x, num)
-
-                eval = self.minimax(depth - 1, False, alpha, beta)
-                self.update_zobrist_hash(y, x, num)
-                self.board[y][x] = None
-                max_eval = max(max_eval, eval)
-                alpha = max(alpha, eval)
-                if beta <= alpha:
-                    self.transposition_table[self.hash_value] = (depth, max_eval, 'lower')
-                    break
-            # transposition_table[board_hash] = max_eval
-            self.transposition_table[self.hash_value] = (depth, max_eval, 'exact')
-            return max_eval
-        else:
-            min_eval = float('inf')
-            for move in moves:
-                x, y, num = int(move[0]), int(move[1]), int(move[2])
-                self.board[y][x] = num
-                self.update_zobrist_hash(y, x, num)
-                eval = self.minimax(depth - 1, True, alpha, beta)
-                self.update_zobrist_hash(y, x, num)
-                self.board[y][x] = None
-                min_eval = min(min_eval, eval)
-                beta = min(beta, eval)
-                if beta <= alpha:
-                    self.transposition_table[self.hash_value] = (depth, min_eval, 'upper')
-                    break
-            # transposition_table[board_hash] = min_eval
-            self.transposition_table[self.hash_value] = (depth, min_eval, 'exact')
-            return min_eval
-
     def evaluate_board(self):
-        board_str = str(self.board)
-        if board_str in self.eval_cache:
-            return self.eval_cache[board_str]
-        
+        # Using Zobrist hashing to cache the board evaluations for quicker lookup
+        if self.hash_value in self.eval_cache:
+            return self.eval_cache[self.hash_value]
+
         score = 0
 
-        # Evaluate rows
+        # Evaluate rows for balance, three-in-a-row, and control
         for row in self.board:
             zeros = sum(1 for x in row if x == 0)
             ones = sum(1 for x in row if x == 1)
-            score += self.evaluate_balance(zeros, ones, len(row))  # Reward balance
+            score += self.evaluate_balance(zeros, ones, len(row))
 
             # Penalize three consecutive same values
             for i in range(len(row) - 2):
                 if row[i] == row[i + 1] == row[i + 2] and row[i] is not None:
-                    score -= 5 * (len(self.board) - i)  # Weight penalties towards end-game
+                    score -= 5 * (len(self.board) - i)
 
-        # Evaluate columns
+        # Evaluate columns similarly
         for col in range(len(self.board[0])):
             zeros = ones = 0
             for row in range(len(self.board)):
@@ -404,105 +315,117 @@ class CommandInterface:
                 elif self.board[row][col] == 1:
                     ones += 1
 
-            score += self.evaluate_balance(zeros, ones, len(self.board))  # Reward balance
+            score += self.evaluate_balance(zeros, ones, len(self.board))
 
-            # Penalize three consecutive same values
+            # Penalize three consecutive same values in columns
             for i in range(len(self.board) - 2):
-                if self.board[i][col] == self.board[i + 1][col] == self.board[i + 2] and self.board[i][col] is not None:
-                    score -= 5 * (len(self.board) - i)  # Weight penalties towards end-game
+                if self.board[i][col] == self.board[i + 1][col] == self.board[i + 2][col] and self.board[i][col] is not None:
+                    score -= 5 * (len(self.board) - i)
 
         # Reward center control
         center_x, center_y = len(self.board[0]) // 2, len(self.board) // 2
         if self.board[center_y][center_x] is not None:
-            score += 10  # Reward having control of the center position
+            score += 10
 
         # Add heuristic for potential two-in-a-row
         for row in self.board:
             for i in range(len(row) - 1):
                 if row[i] == row[i + 1] and row[i] is not None:
-                    score += 3  # Reward two-in-a-row for potential future winning moves
+                    score += 3
 
-        if self.player != 1:  
+        # Invert score if it's the opponent's turn
+        if self.player != 1:
             score = -score
 
-        self.eval_cache[board_str] = score
+        self.eval_cache[self.hash_value] = score
         return score
 
     def evaluate_balance(self, zeros, ones, total_length):
         balance = abs(zeros - ones)
         max_balance = total_length // 2
-        # Exponentially scale reward/penalty for balance to further emphasize a balanced board
         return (max_balance - balance) ** 2
 
-    def evaluate_move_priority(self, move):
+    
+
+    
+
+    def perform_move(self, move):
         x, y, num = int(move[0]), int(move[1]), int(move[2])
-        score = 0
-
-        # 1. Check if the move blocks the opponent's win
-        opponent_num = 1 if num == 0 else 0
-        self.board[y][x] = opponent_num
-        _, reason = self.is_legal(x, y, opponent_num)
-        if not reason and len(self.get_legal_moves()) == 0:
-            # Opponent would win without this move
-            score += 1000
-        self.board[y][x] = None  # Undo the hypothetical move
-
-        # 2. Check if the move contributes toward fulfilling a win condition
         self.board[y][x] = num
-        _, reason = self.is_legal(x, y, num)
-        if not reason and len(self.get_legal_moves()) == 0:
-            # This move creates a winning opportunity
-            score += 1000
-        self.board[y][x] = None  # Undo the hypothetical move
+        self.update_zobrist_hash(x, y, num)
+        self.history.append((y, x, num))
+        self.player = 2 if self.player == 1 else 1
 
-        # 3. Center Control (Encourage staying close to the center)
-        center_x, center_y = len(self.board[0]) // 2, len(self.board) // 2
-        if x == center_x and y == center_y:
-            score += 10
-        elif abs(x - center_x) <= 1 and abs(y - center_y) <= 1:
-            score += 5  # Reward for being close to the center
+    def is_terminal(self):
+        return len(self.get_legal_moves()) == 0
 
-        # 4. Avoid creating vulnerabilities
-        self.board[y][x] = num
-        vulnerability_score = 0
-        for row in range(max(0, y - 1), min(len(self.board), y + 2)):
-            for col in range(max(0, x - 1), min(len(self.board[0]), x + 2)):
-                if self.board[row][col] == opponent_num:
-                    if self.valid_move(col, row, opponent_num):
-                        # If opponent can win in the next move due to our current move
-                        vulnerability_score -= 100
-        score += vulnerability_score
-        self.board[y][x] = None  # Undo the hypothetical move
+    def get_result(self, player_num):
+        if self.is_terminal():
+            return -1 if self.player == player_num else 1
+        return 0
 
-        # 5. Prefer balanced moves
-        zeros = sum(row.count(0) for row in self.board)
-        ones = sum(row.count(1) for row in self.board)
-        imbalance = abs(zeros - ones)
-        score -= imbalance ** 1.5  # Exponentially scale penalty for imbalance
+# Monte Carlo Tree Search Implementation
+class MCTSNode:
+    def __init__(self, state, parent=None, move=None):
+        self.state = state
+        self.parent = parent
+        self.children = []
+        self.visits = 0
+        self.value = 0
+        self.move = move
 
-        # 6. Opponent Mobility (Penalize creating more opponent winning opportunities)
-        self.board[y][x] = num
-        winning_moves = [m for m in self.get_legal_moves() if self.is_potential_win_move(m, opponent_num)]
-        score -= len(winning_moves) * 20
-        self.board[y][x] = None
+    def is_fully_expanded(self):
+        return len(self.children) == len(self.state.get_legal_moves())
 
-        return score
+    def best_child(self, exploration_weight=1.41):
+        choices_weights = [
+            (child.value / (child.visits + 1e-6)) + exploration_weight * math.sqrt((2 * math.log(self.visits)) / (child.visits + 1e-6))
+            for child in self.children
+        ]
+        return self.children[np.argmax(choices_weights)]
 
-    def is_potential_win_move(self, move, player_num):
-        """Check if the move leads to a win for the given player."""
-        x, y, num = int(move[0]), int(move[1]), int(move[2])
-        if num != player_num:
-            return False
+    def expand(self):
+        untried_moves = [move for move in self.state.get_legal_moves() if move not in [child.move for child in self.children]]
+        move = random.choice(untried_moves)
+        new_state = self.state.copy()
+        new_state.perform_move(move)
+        child_node = MCTSNode(new_state, parent=self, move=move)
+        self.children.append(child_node)
+        return child_node
 
-        self.board[y][x] = num
-        if len(self.get_legal_moves()) == 0:
-            # If no legal moves left, the game is over, and the player wins
-            result = True
-        else:
-            result = False
-        self.board[y][x] = None
+    def backpropagate(self, result):
+        self.visits += 1
+        self.value += result
+        if self.parent:
+            self.parent.backpropagate(-result)
 
-        return result
+def mcts(initial_state, itermax, exploration_weight=1.41):
+    root = MCTSNode(initial_state)
+
+    for _ in range(itermax):
+        node = root
+        while node.is_fully_expanded() and node.children:
+            node = node.best_child(exploration_weight)
+
+        if not node.is_fully_expanded():
+            node = node.expand()
+
+        result = rollout(node.state)
+        node.backpropagate(result)
+
+    return root.best_child(0).move
+
+def rollout(state):
+    current_state = state.copy()
+    while current_state.get_legal_moves():
+        move = random.choice(current_state.get_legal_moves())
+        current_state.perform_move(move)
+    return evaluate_winner(current_state)
+
+def evaluate_winner(state):
+    if state.get_legal_moves():
+        return 0
+    return 1 if state.player == 2 else -1
 
     # ===============================================================================================
     # ɅɅɅɅɅɅɅɅɅɅ End of Assignment 4 functions. ɅɅɅɅɅɅɅɅɅɅ
