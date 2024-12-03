@@ -5,47 +5,40 @@
 import sys
 import random
 import signal
+import math
+import copy
 import time
-
 
 # Custom time out exception
 class TimeoutException(Exception):
     pass
 
-
 # Function that is called when we reach the time limit
 def handle_alarm(signum, frame):
     raise TimeoutException
-
 
 class CommandInterface:
 
     def __init__(self):
         # Define the string to function command mapping
         self.command_dict = {
-            "help": self.help,
-            "game": self.game,
-            "show": self.show,
-            "play": self.play,
-            "legal": self.legal,
-            "genmove": self.genmove,
-            "winner": self.winner,
+            "help" : self.help,
+            "game" : self.game,
+            "show" : self.show,
+            "play" : self.play,
+            "legal" : self.legal,
+            "genmove" : self.genmove,
+            "winner" : self.winner,
             "timelimit": self.timelimit
         }
         self.board = [[None]]
         self.player = 1
         self.max_genmove_time = 1
-
-        self.transposition_table = {}
-        self.zobrist_table = {}
-        self.hash_value = 0
-        self.eval_cache = {}
-        self.start_time = 0
         signal.signal(signal.SIGALRM, handle_alarm)
-
-    # ====================================================================================================================
+    
+    #====================================================================================================================
     # VVVVVVVVVV Start of predefined functions. You may modify, but make sure not to break the functionality. VVVVVVVVVV
-    # ====================================================================================================================
+    #====================================================================================================================
 
     # Convert a raw string to a command and a list of arguments
     def process_command(self, str):
@@ -63,7 +56,7 @@ class CommandInterface:
             print(e, file=sys.stderr)
             print("= -1\n")
             return False
-
+        
     # Will continuously receive and execute commands
     # Commands should return True on success, and False on failure
     # Every command will print '= 1' or '= -1' at the end of execution to indicate success or failure respectively
@@ -91,8 +84,7 @@ class CommandInterface:
             try:
                 converted_args.append(int(arg))
             except ValueError:
-                print("Argument '" + arg + "' cannot be interpreted as a number.\nExpected arguments:", template,
-                      file=sys.stderr)
+                print("Argument '" + arg + "' cannot be interpreted as a number.\nExpected arguments:", template, file=sys.stderr)
                 return False
         args = converted_args
         return True
@@ -112,21 +104,13 @@ class CommandInterface:
         if n < 0 or m < 0:
             print("Invalid board size:", n, m, file=sys.stderr)
             return False
-
+        
         self.board = []
         for i in range(m):
-            self.board.append([None] * n)
+            self.board.append([None]*n)
         self.player = 1
-
-        self.zobrist_table = {}
-        self.hash_value = 0
-        self.transposition_table = {}
-        self.history = []
-        
-        # Initialize new Zobrist table
-        self.initialize_zobrist_hash()
         return True
-
+    
     def show(self, args):
         for row in self.board:
             for x in row:
@@ -134,13 +118,13 @@ class CommandInterface:
                     print(".", end="")
                 else:
                     print(x, end="")
-            print()
+            print()                    
         return True
 
     def is_legal(self, x, y, num):
         if self.board[y][x] is not None:
             return False, "occupied"
-
+        
         consecutive = 0
         count = 0
         self.board[y][x] = num
@@ -154,7 +138,7 @@ class CommandInterface:
             else:
                 consecutive = 0
         too_many = count > len(self.board) // 2 + len(self.board) % 2
-
+        
         consecutive = 0
         count = 0
         for col in range(len(self.board[0])):
@@ -172,10 +156,10 @@ class CommandInterface:
 
         self.board[y][x] = None
         return True, ""
-
+    
     def valid_move(self, x, y, num):
-        if x >= 0 and x < len(self.board[0]) and \
-                y >= 0 and y < len(self.board) and \
+        if  x >= 0 and x < len(self.board[0]) and\
+                y >= 0 and y < len(self.board) and\
                 (num == 0 or num == 1):
             legal, _ = self.is_legal(x, y, num)
             return legal
@@ -191,7 +175,7 @@ class CommandInterface:
         except ValueError:
             print("= illegal move: " + " ".join(args) + " wrong coordinate\n")
             return False
-        if x < 0 or x >= len(self.board[0]) or y < 0 or y >= len(self.board):
+        if  x < 0 or x >= len(self.board[0]) or y < 0 or y >= len(self.board):
             print("= illegal move: " + " ".join(args) + " wrong coordinate\n")
             return False
         if args[2] != '0' and args[2] != '1':
@@ -203,14 +187,12 @@ class CommandInterface:
             print("= illegal move: " + " ".join(args) + " " + reason + "\n")
             return False
         self.board[y][x] = num
-        self.update_zobrist_hash(y, x, num)
-        self.history.append((y, x, num))
         if self.player == 1:
             self.player = 2
         else:
             self.player = 1
         return True
-
+    
     def legal(self, args):
         if not self.arg_check(args, "x y number"):
             return False
@@ -220,7 +202,7 @@ class CommandInterface:
         else:
             print("no")
         return True
-
+    
     def get_legal_moves(self):
         moves = []
         for y in range(len(self.board)):
@@ -245,270 +227,175 @@ class CommandInterface:
         self.max_genmove_time = int(args[0])
         return True
 
-    # ===============================================================================================
+    #===============================================================================================
     # ɅɅɅɅɅɅɅɅɅɅ End of predefined functions. ɅɅɅɅɅɅɅɅɅɅ
-    # ===============================================================================================
+    #========================================================================= ======================
 
-    # ===============================================================================================
+    #===============================================================================================
     # VVVVVVVVVV Start of Assignment 4 functions. Add/modify as needed. VVVVVVVV
-    # ===============================================================================================
-    def initialize_zobrist_hash(self):
-        row_range = len(self.board)
-        col_range = len(self.board[0])
-        for x in range(row_range):
-            for y in range(col_range):
-                self.zobrist_table[(x, y)] = [random.getrandbits(64) for _ in range(2)]
+    #===============================================================================================
 
-    def update_zobrist_hash(self, x, y, piece):
-        self.hash_value ^= self.zobrist_table[(x, y)][piece]
+    def uct_value(self, total_visits, node_wins, node_visits):
+        """Calculate the UCT value for a node."""
+        if node_visits == 0:
+            return float('inf')
+        return (node_wins / node_visits) + 1.414 * math.sqrt(math.log(total_visits) / node_visits)
+
+    def simulate_game(self, board, player):
+        """Simulate a random game from the current position."""
+        board = copy.deepcopy(board)
+        current_player = player
+
+        while True:
+            moves = []
+            for y in range(len(board)):
+                for x in range(len(board[0])):
+                    for num in range(2):
+                        if self.is_legal(x, y, num)[0]:
+                            moves.append((x, y, num))
+            
+            if not moves:
+                return 2 if current_player == 1 else 1  
+                
+            x, y, num = random.choice(moves)
+            board[y][x] = num
+            current_player = 3 - current_player  
+
+    def mcts_search(self, time_limit):
+        """Perform MCTS search from the current position."""
+        start_time = time.time()
+        
+        states = {}
+        
+        while time.time() - start_time < time_limit:
+            
+            board = copy.deepcopy(self.board)
+            player = self.player
+            visited_states = []
+            
+           
+            while True:
+
+                state = (tuple(tuple(row) for row in board), player)
+                visited_states.append(state)
+                
+                legal_moves = []
+                for y in range(len(board)):
+                    for x in range(len(board[0])):
+                        for num in range(2):
+                            if self.is_legal(x, y, num)[0]:
+                                legal_moves.append((x, y, num))
+                
+                if not legal_moves:
+                    break
+                
+                # If state is new, initialize it and break for simulation
+                if state not in states:
+                    states[state] = (0, 0)
+                    break
+                
+                # Select move using UCT
+                total_visits = states[state][1]
+                selected_move = None
+                best_value = float('-inf')
+                
+                random.shuffle(legal_moves)  # Add randomization to move selection
+                
+                for move in legal_moves:
+                    x, y, num = move
+                    temp_board = copy.deepcopy(board)
+                    temp_board[y][x] = num
+                    next_state = (tuple(tuple(row) for row in temp_board), 3 - player)
+                    
+                    if next_state not in states:
+                        selected_move = move
+                        break
+                    
+                    wins, visits = states[next_state]
+                    uct = self.uct_value(total_visits, wins, visits)
+                    if uct > best_value:
+                        best_value = uct
+                        selected_move = move
+                
+                # Make the selected move
+                x, y, num = selected_move
+                board[y][x] = num
+                player = 3 - player  # Switch player
+            
+            # Simulation
+            winner = self.simulate_game(board, player)
+            
+            # Backpropagation
+            for state in visited_states:
+                if state not in states:
+                    states[state] = (0, 0)
+                wins, visits = states[state]
+                
+                # Update wins and visits
+                visits += 1
+                if winner != state[1]:  # If the player who didn't make the move from this state won
+                    wins += 1
+                states[state] = (wins, visits)
+        
+        # Select best move from root state
+        
+        legal_moves = []
+        best_visits = -1
+        best_move = None
+        
+        for y in range(len(self.board)):
+            for x in range(len(self.board[0])):
+                for num in range(2):
+                    if self.is_legal(x, y, num)[0]:
+                        temp_board = copy.deepcopy(self.board)
+                        temp_board[y][x] = num
+                        next_state = (tuple(tuple(row) for row in temp_board), 3 - self.player)
+                        
+                        if next_state in states:
+                            visits = states[next_state][1]
+                            if visits > best_visits:
+                                best_visits = visits
+                                best_move = (x, y, num)
+        
+        return best_move
 
     def genmove(self, args):
-        self.start_time = time.time()
-        start_time = time.time()
+        """Generate a move using MCTS."""
         try:
+            signal.alarm(self.max_genmove_time)
+            
+            # Check if there are any legal moves
             moves = self.get_legal_moves()
-            if len(moves) == 0:
+            if not moves:
                 print("resign")
                 return True
-
-            best_move = None
-            depth = 1
-
-            while True:
-                current_best_move = None
-                alpha = float('-inf')
-                beta = float('inf')
-                best_score = float('-inf')
-
-                for move in moves:
-                    x, y, num = int(move[0]), int(move[1]), int(move[2])
-                    self.board[y][x] = num
-                    score = self.minimax(depth - 1, False, alpha, beta)
-                    self.board[y][x] = None
-
-                    if score > best_score:
-                        best_score = score
-                        current_best_move = move
-                    alpha = max(alpha, score)
-
-                if current_best_move:
-                    best_move = current_best_move
-
-                depth += 1
-                if depth > 4:
-                    break
-
-                # Stop if running out of time
-                if time.time() - start_time > self.max_genmove_time - 1:
-                    break
-
-            if best_move:
-                self.play(best_move)
-                print(" ".join(best_move))
-            else:
-                rand_move = moves[random.randint(0, len(moves) - 1)]
+            
+            # Run MCTS with slightly less time than the limit to account for overhead
+            best_move = self.mcts_search(self.max_genmove_time - 0.1)
+            
+            if best_move is None:
+                # Fallback to random move if MCTS fails
+                moves = self.get_legal_moves()
+                rand_move = moves[random.randint(0, len(moves)-1)]
                 self.play(rand_move)
                 print(" ".join(rand_move))
-
+            else:
+                # Play the MCTS move
+                move = [str(x) for x in best_move]
+                self.play(move)
+                print(" ".join(move))
+            
+            signal.alarm(0)
+            
         except TimeoutException:
             print("resign")
+            
         return True
-
-    def minimax(self, depth, is_maximizing, alpha, beta):
-        if time.time() - self.start_time > self.max_genmove_time - 1.0:
-            raise TimeoutException()
-
-        if depth == 0 or len(self.get_legal_moves()) == 0:
-            return self.evaluate_board()
-
-        if self.hash_value in self.transposition_table:
-            stored_depth, stored_value, flag = self.transposition_table[self.hash_value]
-            if stored_depth >= depth:
-                if flag == 'exact':
-                    return stored_value
-                elif flag == 'lower' and stored_value >= beta:
-                    return stored_value
-                elif flag == 'upper' and stored_value <= alpha:
-                    return stored_value
-
-        #  move ordering to improve alpha-beta pruning efficiency
-        moves = self.get_legal_moves()
-        if not moves:  # Add this check
-            return self.evaluate_board()
-        moves.sort(key=lambda move: self.evaluate_move_priority(move), reverse=True)
-
-        # board_hash = str(self.board)
-        # if board_hash in transposition_table:
-        #     return transposition_table[board_hash]
-
-        if is_maximizing:
-            max_eval = float('-inf')
-            for move in moves:
-                x, y, num = int(move[0]), int(move[1]), int(move[2])
-                self.board[y][x] = num
-                self.update_zobrist_hash(y, x, num)
-
-                eval = self.minimax(depth - 1, False, alpha, beta)
-                self.update_zobrist_hash(y, x, num)
-                self.board[y][x] = None
-                max_eval = max(max_eval, eval)
-                alpha = max(alpha, eval)
-                if beta <= alpha:
-                    self.transposition_table[self.hash_value] = (depth, max_eval, 'lower')
-                    break
-            # transposition_table[board_hash] = max_eval
-            self.transposition_table[self.hash_value] = (depth, max_eval, 'exact')
-            return max_eval
-        else:
-            min_eval = float('inf')
-            for move in moves:
-                x, y, num = int(move[0]), int(move[1]), int(move[2])
-                self.board[y][x] = num
-                self.update_zobrist_hash(y, x, num)
-                eval = self.minimax(depth - 1, True, alpha, beta)
-                self.update_zobrist_hash(y, x, num)
-                self.board[y][x] = None
-                min_eval = min(min_eval, eval)
-                beta = min(beta, eval)
-                if beta <= alpha:
-                    self.transposition_table[self.hash_value] = (depth, min_eval, 'upper')
-                    break
-            # transposition_table[board_hash] = min_eval
-            self.transposition_table[self.hash_value] = (depth, min_eval, 'exact')
-            return min_eval
-
-    def evaluate_board(self):
-        board_str = str(self.board)
-        if board_str in self.eval_cache:
-            return self.eval_cache[board_str]
-        
-        score = 0
-
-        # Evaluate rows
-        for row in self.board:
-            zeros = sum(1 for x in row if x == 0)
-            ones = sum(1 for x in row if x == 1)
-            score += self.evaluate_balance(zeros, ones, len(row))  # Reward balance
-
-            # Penalize three consecutive same values
-            for i in range(len(row) - 2):
-                if row[i] == row[i + 1] == row[i + 2] and row[i] is not None:
-                    score -= 5 * (len(self.board) - i)  # Weight penalties towards end-game
-
-        # Evaluate columns
-        for col in range(len(self.board[0])):
-            zeros = ones = 0
-            for row in range(len(self.board)):
-                if self.board[row][col] == 0:
-                    zeros += 1
-                elif self.board[row][col] == 1:
-                    ones += 1
-
-            score += self.evaluate_balance(zeros, ones, len(self.board))  # Reward balance
-
-            # Penalize three consecutive same values
-            for i in range(len(self.board) - 2):
-                if self.board[i][col] == self.board[i + 1][col] == self.board[i + 2] and self.board[i][col] is not None:
-                    score -= 5 * (len(self.board) - i)  # Weight penalties towards end-game
-
-        # Reward center control
-        center_x, center_y = len(self.board[0]) // 2, len(self.board) // 2
-        if self.board[center_y][center_x] is not None:
-            score += 10  # Reward having control of the center position
-
-        # Add heuristic for potential two-in-a-row
-        for row in self.board:
-            for i in range(len(row) - 1):
-                if row[i] == row[i + 1] and row[i] is not None:
-                    score += 3  # Reward two-in-a-row for potential future winning moves
-
-        if self.player != 1:  
-            score = -score
-
-        self.eval_cache[board_str] = score
-        return score
-
-    def evaluate_balance(self, zeros, ones, total_length):
-        balance = abs(zeros - ones)
-        max_balance = total_length // 2
-        # Exponentially scale reward/penalty for balance to further emphasize a balanced board
-        return (max_balance - balance) ** 2
-
-    def evaluate_move_priority(self, move):
-        x, y, num = int(move[0]), int(move[1]), int(move[2])
-        score = 0
-
-        # 1. Check if the move blocks the opponent's win
-        opponent_num = 1 if num == 0 else 0
-        self.board[y][x] = opponent_num
-        _, reason = self.is_legal(x, y, opponent_num)
-        if not reason and len(self.get_legal_moves()) == 0:
-            # Opponent would win without this move
-            score += 1000
-        self.board[y][x] = None  # Undo the hypothetical move
-
-        # 2. Check if the move contributes toward fulfilling a win condition
-        self.board[y][x] = num
-        _, reason = self.is_legal(x, y, num)
-        if not reason and len(self.get_legal_moves()) == 0:
-            # This move creates a winning opportunity
-            score += 1000
-        self.board[y][x] = None  # Undo the hypothetical move
-
-        # 3. Center Control (Encourage staying close to the center)
-        center_x, center_y = len(self.board[0]) // 2, len(self.board) // 2
-        if x == center_x and y == center_y:
-            score += 10
-        elif abs(x - center_x) <= 1 and abs(y - center_y) <= 1:
-            score += 5  # Reward for being close to the center
-
-        # 4. Avoid creating vulnerabilities
-        self.board[y][x] = num
-        vulnerability_score = 0
-        for row in range(max(0, y - 1), min(len(self.board), y + 2)):
-            for col in range(max(0, x - 1), min(len(self.board[0]), x + 2)):
-                if self.board[row][col] == opponent_num:
-                    if self.valid_move(col, row, opponent_num):
-                        # If opponent can win in the next move due to our current move
-                        vulnerability_score -= 100
-        score += vulnerability_score
-        self.board[y][x] = None  # Undo the hypothetical move
-
-        # 5. Prefer balanced moves
-        zeros = sum(row.count(0) for row in self.board)
-        ones = sum(row.count(1) for row in self.board)
-        imbalance = abs(zeros - ones)
-        score -= imbalance ** 1.5  # Exponentially scale penalty for imbalance
-
-        # 6. Opponent Mobility (Penalize creating more opponent winning opportunities)
-        self.board[y][x] = num
-        winning_moves = [m for m in self.get_legal_moves() if self.is_potential_win_move(m, opponent_num)]
-        score -= len(winning_moves) * 20
-        self.board[y][x] = None
-
-        return score
-
-    def is_potential_win_move(self, move, player_num):
-        """Check if the move leads to a win for the given player."""
-        x, y, num = int(move[0]), int(move[1]), int(move[2])
-        if num != player_num:
-            return False
-
-        self.board[y][x] = num
-        if len(self.get_legal_moves()) == 0:
-            # If no legal moves left, the game is over, and the player wins
-            result = True
-        else:
-            result = False
-        self.board[y][x] = None
-
-        return result
-
-    # ===============================================================================================
+    
+    #===============================================================================================
     # ɅɅɅɅɅɅɅɅɅɅ End of Assignment 4 functions. ɅɅɅɅɅɅɅɅɅɅ
-    # ===============================================================================================
-
-
+    #===============================================================================================
+    
 if __name__ == "__main__":
     interface = CommandInterface()
     interface.main_loop()
