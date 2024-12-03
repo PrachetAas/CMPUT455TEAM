@@ -256,38 +256,56 @@ class CommandInterface:
     # ===============================================================================================
 
 
-    def initialize_zobrist_hash(self):
-        row_range = len(self.board)
-        col_range = len(self.board[0])
-        for x in range(row_range):
-            for y in range(col_range):
-                self.zobrist_table[(x, y)] = [random.getrandbits(64) for _ in range(2)]
+    def rotate_pattern(self, pattern, angle):
+        """Rotate pattern by the specified angle (90, 180, 270 degrees)."""
+        if angle == 180:
+            return pattern[::-1]  # Simple reverse for 180°
+        if angle == 90 or angle == 270:
+            return ''.join([pattern[i] for i in (4, 2, 0, 3, 1)])  # Rotations for 90° and 270°
+        return pattern
 
-    def update_zobrist_hash(self, x, y, piece):
-        self.hash_value ^= self.zobrist_table[(x, y)][piece]
+    def get_board_pattern(self, x, y, direction):
+        """Helper function to extract a row or column pattern based on the direction (row or column)."""
+        n, m = len(self.board[0]), len(self.board)
+        pattern = ""
+        if direction == "row":
+            for i in range(x - 2, x + 3):
+                if 0 <= i < n:
+                    pattern += "." if self.board[y][i] is None else str(self.board[y][i])
+                else:
+                    pattern += "X"
+        elif direction == "column":
+            for j in range(y - 2, y + 3):
+                if 0 <= j < m:
+                    pattern += "." if self.board[j][x] is None else str(self.board[j][x])
+                else:
+                    pattern += "X"
+        return pattern
 
-    def genmove(self, args):
-        self.start_time = time.time()
-        try:
-            moves = self.get_legal_moves()
-            if len(moves) == 0:
-                print("resign")
-                return True
+    def calculate_move_weight(self, x, y, num):
+        """Calculate the weight of a move at (x, y) for 'num' (0 or 1)."""
+        row_pattern = self.get_board_pattern(x, y, "row")
+        col_pattern = self.get_board_pattern(x, y, "column")
+        
+        # Evaluate the board with pattern rotations
+        weights = []
+        for angle in [0, 90, 180, 270]:
+            rotated_row_pattern = self.rotate_pattern(row_pattern, angle)
+            rotated_col_pattern = self.rotate_pattern(col_pattern, angle)
+            # Higher weight if the move creates a favorable pattern
+            row_weight = self.pattern_dict.get((rotated_row_pattern, num), 10)
+            col_weight = self.pattern_dict.get((rotated_col_pattern, num), 10)
+            weights.append(row_weight + col_weight)
+        
+        return max(weights)  # Return the highest weight as an evaluation metric
 
-            best_move = mcts(self, itermax=1000)  # Adjust itermax for more simulations
+    # Evaluate Balance Function
+    def evaluate_balance(self, zeros, ones, total_length):
+        balance = abs(zeros - ones)
+        max_balance = total_length // 2
+        return (max_balance - balance) ** 2
 
-            if best_move:
-                self.perform_move(best_move)
-                print(" ".join(best_move))
-            else:
-                rand_move = moves[random.randint(0, len(moves) - 1)]
-                self.perform_move(rand_move)
-                print(" ".join(rand_move))
-
-        except TimeoutException:
-            print("resign")
-        return True
-
+    # Board Evaluation Function
     def evaluate_board(self):
         # Using Zobrist hashing to cache the board evaluations for quicker lookup
         if self.hash_value in self.eval_cache:
@@ -340,10 +358,39 @@ class CommandInterface:
         self.eval_cache[self.hash_value] = score
         return score
 
-    def evaluate_balance(self, zeros, ones, total_length):
-        balance = abs(zeros - ones)
-        max_balance = total_length // 2
-        return (max_balance - balance) ** 2
+    # MCTS Integration with Pattern-Based Enhancements
+    def genmove(self, args):
+        self.start_time = time.time()
+        try:
+            moves = self.get_legal_moves()
+            if len(moves) == 0:
+                print("resign")
+                return True
+
+            best_move = mcts(self, itermax=1000)  # Adjust itermax for more simulations
+
+            if best_move:
+                self.perform_move(best_move)
+                print(" ".join(best_move))
+            else:
+                rand_move = moves[random.randint(0, len(moves) - 1)]
+                self.perform_move(rand_move)
+                print(" ".join(rand_move))
+
+        except TimeoutException:
+            print("resign")
+        return True
+
+    # Additional Helper Functions (Zobrist, Board Handling)
+    def initialize_zobrist_hash(self):
+        row_range = len(self.board)
+        col_range = len(self.board[0])
+        for x in range(row_range):
+            for y in range(col_range):
+                self.zobrist_table[(x, y)] = [random.getrandbits(64) for _ in range(2)]
+
+    def update_zobrist_hash(self, x, y, piece):
+        self.hash_value ^= self.zobrist_table[(x, y)][piece]
 
     def perform_move(self, move):
         x, y, num = int(move[0]), int(move[1]), int(move[2])
@@ -352,88 +399,17 @@ class CommandInterface:
         self.history.append((y, x, num))
         self.player = 2 if self.player == 1 else 1
 
+    # Terminal Check Function
     def is_terminal(self):
         return len(self.get_legal_moves()) == 0
 
+    # Get Result Function
     def get_result(self, player_num):
         if self.is_terminal():
             return -1 if self.player == player_num else 1
         return 0
 
-    def get_legal_moves(self):
-        moves = []
-        for y in range(len(self.board)):
-            for x in range(len(self.board[0])):
-                for num in range(2):
-                    legal, _ = self.is_legal(x, y, num)
-                    if legal:
-                        moves.append([str(x), str(y), str(num)])
-        return moves
-
-    def is_legal(self, x, y, num):
-        if self.board[y][x] is not None:
-            return False
-        consecutive = 0
-        count = 0
-        self.board[y][x] = num
-        for row in range(len(self.board)):
-            if self.board[row][x] == num:
-                count += 1
-                consecutive += 1
-                if consecutive >= 3:
-                    self.board[y][x] = None
-                    return False
-            else:
-                consecutive = 0
-
-        too_many = count > len(self.board) // 2 + len(self.board) % 2
-        consecutive = 0
-        count = 0
-        for col in range(len(self.board[0])):
-            if self.board[y][col] == num:
-                count += 1
-                consecutive += 1
-                if consecutive >= 3:
-                    self.board[y][x] = None
-                    return False
-            else:
-                consecutive = 0
-
-        if too_many or count > len(self.board[0]) // 2 + len(self.board[0]) % 2:
-            self.board[y][x] = None
-            return False
-
-        self.board[y][x] = None
-        return True
-
-    def get_board_pattern(self, x, y, direction):
-        """Extract a row or column pattern based on the direction (row or column)."""
-        n, m = len(self.board[0]), len(self.board)
-        pattern = ""
-        if direction == "row":
-            for i in range(x - 2, x + 3):
-                if 0 <= i < n:
-                    pattern += "." if self.board[y][i] is None else str(self.board[y][i])
-                else:
-                    pattern += "X"
-        elif direction == "column":
-            for j in range(y - 2, y + 3):
-                if 0 <= j < m:
-                    pattern += "." if self.board[j][x] is None else str(self.board[j][x])
-                else:
-                    pattern += "X"
-        return pattern
-
-    def calculate_move_weight(self, x, y, num):
-        """Calculate the weight of a move at (x, y) for 'num' (0 or 1)."""
-        row_pattern = self.get_board_pattern(x, y, "row")
-        col_pattern = self.get_board_pattern(x, y, "column")
-        row_weight = self.pattern_dict.get((row_pattern, num), 10)  # Default weight if no match
-        col_weight = self.pattern_dict.get((col_pattern, num), 10)
-        return row_weight + col_weight
-
-
-# MCTSNode class to handle expansion, selection, backpropagation with pattern integration
+# MCTSNode class with Pattern-Based Enhancements
 class MCTSNode:
     def __init__(self, state, parent=None, move=None):
         self.state = state
@@ -456,7 +432,7 @@ class MCTSNode:
     def expand(self):
         untried_moves = [move for move in self.state.get_legal_moves() if move not in [child.move for child in self.children]]
         weighted_moves = []
-        
+
         # Assign pattern-based weights to the untried moves
         for move in untried_moves:
             x, y, num = int(move[0]), int(move[1]), int(move[2])
@@ -480,7 +456,7 @@ class MCTSNode:
         if self.parent:
             self.parent.backpropagate(-result)
 
-
+# MCTS with Pattern-Based Rollouts
 def mcts(initial_state, itermax, exploration_weight=1.41):
     root = MCTSNode(initial_state)
 
@@ -497,10 +473,9 @@ def mcts(initial_state, itermax, exploration_weight=1.41):
 
     return root.best_child(0).move
 
-
 def rollout(state):
     current_state = state.copy()
-    while current_state.get_legal_moves():
+    while not current_state.is_terminal():  # Stop rolling out if terminal state
         # Calculate weights of moves based on patterns
         weighted_moves = []
         moves = current_state.get_legal_moves()
@@ -521,7 +496,6 @@ def rollout(state):
         current_state.perform_move(selected_move)
 
     return evaluate_winner(current_state)
-
 
 def evaluate_winner(state):
     if state.get_legal_moves():
