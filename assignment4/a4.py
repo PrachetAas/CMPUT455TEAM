@@ -345,10 +345,6 @@ class CommandInterface:
         max_balance = total_length // 2
         return (max_balance - balance) ** 2
 
-    
-
-    
-
     def perform_move(self, move):
         x, y, num = int(move[0]), int(move[1]), int(move[2])
         self.board[y][x] = num
@@ -364,7 +360,80 @@ class CommandInterface:
             return -1 if self.player == player_num else 1
         return 0
 
-# Monte Carlo Tree Search Implementation
+    def get_legal_moves(self):
+        moves = []
+        for y in range(len(self.board)):
+            for x in range(len(self.board[0])):
+                for num in range(2):
+                    legal, _ = self.is_legal(x, y, num)
+                    if legal:
+                        moves.append([str(x), str(y), str(num)])
+        return moves
+
+    def is_legal(self, x, y, num):
+        if self.board[y][x] is not None:
+            return False
+        consecutive = 0
+        count = 0
+        self.board[y][x] = num
+        for row in range(len(self.board)):
+            if self.board[row][x] == num:
+                count += 1
+                consecutive += 1
+                if consecutive >= 3:
+                    self.board[y][x] = None
+                    return False
+            else:
+                consecutive = 0
+
+        too_many = count > len(self.board) // 2 + len(self.board) % 2
+        consecutive = 0
+        count = 0
+        for col in range(len(self.board[0])):
+            if self.board[y][col] == num:
+                count += 1
+                consecutive += 1
+                if consecutive >= 3:
+                    self.board[y][x] = None
+                    return False
+            else:
+                consecutive = 0
+
+        if too_many or count > len(self.board[0]) // 2 + len(self.board[0]) % 2:
+            self.board[y][x] = None
+            return False
+
+        self.board[y][x] = None
+        return True
+
+    def get_board_pattern(self, x, y, direction):
+        """Extract a row or column pattern based on the direction (row or column)."""
+        n, m = len(self.board[0]), len(self.board)
+        pattern = ""
+        if direction == "row":
+            for i in range(x - 2, x + 3):
+                if 0 <= i < n:
+                    pattern += "." if self.board[y][i] is None else str(self.board[y][i])
+                else:
+                    pattern += "X"
+        elif direction == "column":
+            for j in range(y - 2, y + 3):
+                if 0 <= j < m:
+                    pattern += "." if self.board[j][x] is None else str(self.board[j][x])
+                else:
+                    pattern += "X"
+        return pattern
+
+    def calculate_move_weight(self, x, y, num):
+        """Calculate the weight of a move at (x, y) for 'num' (0 or 1)."""
+        row_pattern = self.get_board_pattern(x, y, "row")
+        col_pattern = self.get_board_pattern(x, y, "column")
+        row_weight = self.pattern_dict.get((row_pattern, num), 10)  # Default weight if no match
+        col_weight = self.pattern_dict.get((col_pattern, num), 10)
+        return row_weight + col_weight
+
+
+# MCTSNode class to handle expansion, selection, backpropagation with pattern integration
 class MCTSNode:
     def __init__(self, state, parent=None, move=None):
         self.state = state
@@ -386,10 +455,22 @@ class MCTSNode:
 
     def expand(self):
         untried_moves = [move for move in self.state.get_legal_moves() if move not in [child.move for child in self.children]]
-        move = random.choice(untried_moves)
+        weighted_moves = []
+        
+        # Assign pattern-based weights to the untried moves
+        for move in untried_moves:
+            x, y, num = int(move[0]), int(move[1]), int(move[2])
+            weight = self.state.calculate_move_weight(x, y, num)
+            weighted_moves.append((move, weight))
+
+        # Sort moves based on weights (higher weight moves first)
+        weighted_moves.sort(key=lambda mw: mw[1], reverse=True)
+
+        # Choose the highest weighted move
+        best_move = weighted_moves[0][0]
         new_state = self.state.copy()
-        new_state.perform_move(move)
-        child_node = MCTSNode(new_state, parent=self, move=move)
+        new_state.perform_move(best_move)
+        child_node = MCTSNode(new_state, parent=self, move=best_move)
         self.children.append(child_node)
         return child_node
 
@@ -398,6 +479,7 @@ class MCTSNode:
         self.value += result
         if self.parent:
             self.parent.backpropagate(-result)
+
 
 def mcts(initial_state, itermax, exploration_weight=1.41):
     root = MCTSNode(initial_state)
@@ -415,17 +497,36 @@ def mcts(initial_state, itermax, exploration_weight=1.41):
 
     return root.best_child(0).move
 
+
 def rollout(state):
     current_state = state.copy()
     while current_state.get_legal_moves():
-        move = random.choice(current_state.get_legal_moves())
-        current_state.perform_move(move)
+        # Calculate weights of moves based on patterns
+        weighted_moves = []
+        moves = current_state.get_legal_moves()
+        for move in moves:
+            x, y, num = int(move[0]), int(move[1]), int(move[2])
+            weight = current_state.calculate_move_weight(x, y, num)
+            weighted_moves.append((move, weight))
+
+        # Normalize weights to probabilities
+        total_weight = sum(weight for _, weight in weighted_moves)
+        if total_weight > 0:
+            probabilities = [weight / total_weight for _, weight in weighted_moves]
+        else:
+            probabilities = [1 / len(weighted_moves)] * len(weighted_moves)
+
+        # Select move based on weighted probabilities
+        selected_move = random.choices([move for move, _ in weighted_moves], probabilities)[0]
+        current_state.perform_move(selected_move)
+
     return evaluate_winner(current_state)
+
 
 def evaluate_winner(state):
     if state.get_legal_moves():
-        return 0
-    return 1 if state.player == 2 else -1
+        return 0  # Game not finished
+    return 1 if state.player == 2 else -1  # Current player loses
 
     # ===============================================================================================
     # ɅɅɅɅɅɅɅɅɅɅ End of Assignment 4 functions. ɅɅɅɅɅɅɅɅɅɅ
