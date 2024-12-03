@@ -384,7 +384,7 @@ class CommandInterface:
                     break
                     
                 score = self.evaluate_move((x, y, num))
-                weighted_score = score * (1 + prob)  # Combine MCTS score with pattern weight
+                weighted_score = score + prob # Combine MCTS score with pattern weight
                 if weighted_score > best_score:
                     best_score = weighted_score
                     best_move = (x, y, num)
