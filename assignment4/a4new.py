@@ -18,15 +18,15 @@ def handle_alarm(signum, frame):
     raise TimeoutException
 
 class Node:
-    def __init__(self, parent, move, player):
+    def __init__(self, state, parent, move, player):
+        self.state = state  # Board state at this node
         self.parent = parent
         self.move = move  # The move that led to this node
         self.player = player  # The player who made the move
         self.wins = 0
         self.visits = 0
         self.children = []
-        self.untried_moves = []  # Moves that haven't been tried yet
-
+        self.untried_moves = []
         # Initialize untried moves if this is not a terminal node
         if not self.is_terminal():
             self.untried_moves = self.get_legal_moves()
@@ -36,7 +36,14 @@ class Node:
 
     def get_legal_moves(self):
         # Implement logic to get legal moves from this node's state
-        pass
+        moves = []
+        for y in range(len(self.state)):
+            for x in range(len(self.state[0])):
+                for num in range(2):
+                    legal, _ = self.is_legal(self.state, x, y, num)
+                    if legal:
+                        moves.append((x, y, num))
+        return moves
 
     def UCT_select_child(self):
         # Use UCT to select a child node
@@ -47,6 +54,42 @@ class Node:
         if child.visits == 0:
             return float('inf')
         return (child.wins / child.visits) + 1.414 * math.sqrt(math.log(self.visits) / child.visits)
+    
+    def is_legal(self, board, x, y, num):
+        if board[y][x] is not None:
+            return False, "occupied"
+        
+        consecutive = 0
+        count = 0
+        board[y][x] = num
+        for row in range(len(board)):
+            if board[row][x] == num:
+                count += 1
+                consecutive += 1
+                if consecutive >= 3:
+                    board[y][x] = None
+                    return False, "three in a row"
+            else:
+                consecutive = 0
+        too_many = count > len(board) // 2 + len(board) % 2
+        
+        consecutive = 0
+        count = 0
+        for col in range(len(board[0])):
+            if board[y][col] == num:
+                count += 1
+                consecutive += 1
+                if consecutive >= 3:
+                    board[y][x] = None
+                    return False, "three in a row"
+            else:
+                consecutive = 0
+        if too_many or count > len(board[0]) // 2 + len(board[0]) % 2:
+            board[y][x] = None
+            return False, "too many " + str(num)
+        
+        board[y][x] = None
+        return True, ""
 
 class CommandInterface:
 
@@ -280,10 +323,16 @@ class CommandInterface:
                 node = node.UCT_select_child()
         return node
     
+    def make_move(self, board, move):
+        x, y, num = move
+        new_board = copy.deepcopy(board)
+        new_board[y][x] = num
+        return new_board
+
     def expand_node(self, node):
         move = node.untried_moves.pop()
         next_state = self.make_move(node.state, move)
-        child_node = Node(parent=node, move=move, player=3 - node.player)
+        child_node = Node(state=next_state, parent=node, move=move, player=3 - node.player)
         node.children.append(child_node)
         return child_node
     
@@ -291,12 +340,22 @@ class CommandInterface:
         current_state = copy.deepcopy(node.state)
         current_player = node.player
         while True:
-            moves = self.get_legal_moves(current_state)
+            moves = self.get_legal_moves_state(current_state)
             if not moves:
                 return 3 - current_player  # The opponent wins
             move = random.choice(moves)
             current_state = self.make_move(current_state, move)
             current_player = 3 - current_player
+
+    def get_legal_moves_state(self, state):
+        moves = []
+        for y in range(len(state)):
+            for x in range(len(state[0])):
+                for num in range(2):
+                    legal, _ = self.is_legal(state, x, y, num)
+                    if legal:
+                        moves.append((x, y, num))
+        return moves
 
     def backpropagate(self, node, winner):
         while node is not None:
@@ -308,8 +367,8 @@ class CommandInterface:
     def genmove(self, args):
         try:
             signal.alarm(self.max_genmove_time)
-            root_node = Node(parent=None, move=None, player=self.player)
-            root_node.state = copy.deepcopy(self.board)
+            root_state = copy.deepcopy(self.board)
+            root_node = Node(state=root_state, parent=None, move=None, player=self.player)
             
             start_time = time.time()
             while time.time() - start_time < self.max_genmove_time - 0.1:
