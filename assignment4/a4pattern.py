@@ -17,37 +17,6 @@ class TimeoutException(Exception):
 def handle_alarm(signum, frame):
     raise TimeoutException
 
-class Node:
-    def __init__(self, parent, move, player):
-        self.parent = parent
-        self.move = move  # The move that led to this node
-        self.player = player  # The player who made the move
-        self.wins = 0
-        self.visits = 0
-        self.children = []
-        self.untried_moves = []  # Moves that haven't been tried yet
-
-        # Initialize untried moves if this is not a terminal node
-        if not self.is_terminal():
-            self.untried_moves = self.get_legal_moves()
-    
-    def is_terminal(self):
-        return len(self.get_legal_moves()) == 0
-
-    def get_legal_moves(self):
-        # Implement logic to get legal moves from this node's state
-        pass
-
-    def UCT_select_child(self):
-        # Use UCT to select a child node
-        return max(self.children, key=lambda child: self.uct_value(child))
-    
-    def uct_value(self, child):
-        """Calculate the UCT value for a child node."""
-        if child.visits == 0:
-            return float('inf')
-        return (child.wins / child.visits) + 1.414 * math.sqrt(math.log(self.visits) / child.visits)
-
 class CommandInterface:
 
     def __init__(self):
@@ -66,6 +35,32 @@ class CommandInterface:
         self.player = 1
         self.max_genmove_time = 1
         signal.signal(signal.SIGALRM, handle_alarm)
+
+        self.pattern = {
+            ('X1.0X', 0): 21,  # Very high weight for 0
+            ('1...X', 0): 21,
+            ('11.0X', 0): 21,
+            ('X0.XX', 0): 21,
+            ('1...0', 0): 21,
+            ('.0.0.', 0): 18,  # Good balanced patterns
+            ('.0.0.', 1): 18,
+            ('01.1.', 0): 18,
+            ('.0.XX', 0): 18,
+            ('0...X', 0): 18,
+            ('10..1', 0): 20,
+            ('10..1', 1): 12,
+            ('00.00', 0): 20,
+            ('....X', 1): 20,
+            ('10...', 0): 20,
+            ('X...X', 1): 20,
+            ('10.00', 1): 20,
+            ('X..XX', 0): 20,
+            ('.0.1X', 0): 20,
+        }
+
+        self.pattern_rotate = {}
+        for (pattern, num), weight in self.pattern.items():
+            self.add_rotations(pattern, num, weight)
     
     #====================================================================================================================
     # VVVVVVVVVV Start of predefined functions. You may modify, but make sure not to break the functionality. VVVVVVVVVV
@@ -272,64 +267,139 @@ class CommandInterface:
             return float('inf')
         return (node_wins / node_visits) + 1.414 * math.sqrt(math.log(total_visits) / node_visits)
 
-    def select_node(self, node):
-        while not node.is_terminal():
-            if node.untried_moves:
-                return self.expand_node(node)
-            else:
-                node = node.UCT_select_child()
-        return node
-    
-    def expand_node(self, node):
-        move = node.untried_moves.pop()
-        next_state = self.make_move(node.state, move)
-        child_node = Node(parent=node, move=move, player=3 - node.player)
-        node.children.append(child_node)
-        return child_node
-    
-    def simulate(self, node):
-        current_state = copy.deepcopy(node.state)
-        current_player = node.player
+    def simulate_random_game(self, current_board, current_player):
+        """Simulate a game using pattern weights to guide move selection."""
+        board = copy.deepcopy(current_board)
+        player = current_player
+        
         while True:
-            moves = self.get_legal_moves(current_state)
+            moves = []
+            total_weight = 0
+            for y in range(len(board)):
+                for x in range(len(board[0])):
+                    for num in range(2):
+                        if self.valid_move(x, y, num):
+                            weight = self.calculate_move_weight(x, y, num)
+                            moves.append((x, y, num))
+                            total_weight += weight
+            
             if not moves:
-                return 3 - current_player  # The opponent wins
-            move = random.choice(moves)
-            current_state = self.make_move(current_state, move)
-            current_player = 3 - current_player
+                return 3 - player
+            
+            # Use weighted random selection instead of uniform random
+            weights = [self.calculate_move_weight(x, y, num) for x, y, num in moves]
+            x, y, num = random.choices(moves, weights=weights)[0]
+            board[y][x] = num
+            player = 3 - player
 
-    def backpropagate(self, node, winner):
-        while node is not None:
-            node.visits += 1
-            if node.player == winner:
-                node.wins += 1
-            node = node.parent
+    def evaluate_move(self, move, simulations=10):
+        """Evaluate a move by running multiple random simulations."""
+        x, y, num = move
+        wins = 0
+        
+        # Create a copy of the current state
+        temp_board = copy.deepcopy(self.board)
+        temp_board[y][x] = num
+        next_player = 3 - self.player
+        
+        # Run simulations from the resulting position
+        for _ in range(simulations):
+            winner = self.simulate_random_game(temp_board, next_player)
+            if winner != next_player:  # If the opponent (next_player) loses
+                wins += 1
+                
+        return wins / simulations
+    
+    def add_rotations(self, pattern, num, weight):
+        """Adds all rotations (0, 90, 180, 270 degrees) of the pattern."""
+        rotations = [pattern, self.rotate_pattern(pattern, 90),
+                     self.rotate_pattern(pattern, 180), self.rotate_pattern(pattern, 270)]
+        for rotated_pattern in rotations:
+            self.pattern_rotate[(rotated_pattern, num)] = weight
+
+    def rotate_pattern(self, pattern, angle):
+        """Rotate pattern by the specified angle (90, 180, 270 degrees)."""
+        if angle == 180:
+            return pattern[::-1]  # Simple reverse for 180°
+        if angle == 90 or angle == 270:
+            return ''.join([pattern[i] for i in (4, 2, 0, 3, 1)])  # Rotations for 90° and 270°
+        return pattern
+
+    def get_board_pattern(self, x, y, direction):
+        """Helper function to extract a row or column pattern based on the direction (row or column)."""
+        n, m = len(self.board[0]), len(self.board)
+        pattern = ""
+        if direction == "row":
+            for i in range(x - 2, x + 3):
+                if 0 <= i < n:
+                    pattern += "." if self.board[y][i] is None else str(self.board[y][i])
+                else:
+                    pattern += "X"
+        elif direction == "column":
+            for j in range(y - 2, y + 3):
+                if 0 <= j < m:
+                    pattern += "." if self.board[j][x] is None else str(self.board[j][x])
+                else:
+                    pattern += "X"
+        return pattern
+
+    def calculate_move_weight(self, x, y, num):
+        """Calculate the weight of a move at (x, y) for 'num' (0 or 1)."""
+        row_pattern = self.get_board_pattern(x, y, "row")
+        col_pattern = self.get_board_pattern(x, y, "column")
+        row_weight = self.pattern_rotate.get((row_pattern, num), 10)  # Default weight if no match
+        col_weight = self.pattern_rotate.get((col_pattern, num), 10)
+        return row_weight + col_weight
 
     def genmove(self, args):
         try:
             signal.alarm(self.max_genmove_time)
-            root_node = Node(parent=None, move=None, player=self.player)
-            root_node.state = copy.deepcopy(self.board)
             
+            # Get all legal moves with their weights
+            moves = []
+            total_weight = 0
+            for y in range(len(self.board)):
+                for x in range(len(self.board[0])):
+                    for num in range(2):
+                        if self.valid_move(x, y, num):
+                            weight = self.calculate_move_weight(x, y, num)
+                            moves.append((x, y, num, weight))
+                            total_weight += weight
+            
+            if not moves:
+                print("resign")
+                return True
+            
+            # Convert weights to probabilities and evaluate moves
+            weighted_moves = [(x, y, num, weight/total_weight) for x, y, num, weight in moves]
+            weighted_moves.sort(key=lambda x: x[3], reverse=True)  # Sort by probability
+            
+            # Evaluate the most promising moves first
+            best_move = None
+            best_score = -1
             start_time = time.time()
-            while time.time() - start_time < self.max_genmove_time - 0.1:
-                node = self.select_node(root_node)
-                winner = self.simulate(node)
-                self.backpropagate(node, winner)
             
-            # Choose the move with the highest visit count
-            best_child = max(root_node.children, key=lambda child: child.visits)
-            best_move = best_child.move
+            for x, y, num, prob in weighted_moves:
+                if time.time() - start_time > self.max_genmove_time - 0.5:
+                    break
+                    
+                score = self.evaluate_move((x, y, num))
+                weighted_score = score + prob # Combine MCTS score with pattern weight
+                if weighted_score > best_score:
+                    best_score = weighted_score
+                    best_move = (x, y, num)
             
-            # Play the best move
-            self.play([str(best_move[0]), str(best_move[1]), str(best_move[2])])
-            print(f"{best_move[0]} {best_move[1]} {best_move[2]}")
+            # Convert move to string format and play it
+            move_str = [str(best_move[0]), str(best_move[1]), str(best_move[2])]
+            self.play(move_str)
+            print(" ".join(move_str))
             
             signal.alarm(0)
+            
         except TimeoutException:
             print("resign")
+            
         return True
-
     
     #===============================================================================================
     # ɅɅɅɅɅɅɅɅɅɅ End of Assignment 4 functions. ɅɅɅɅɅɅɅɅɅɅ
