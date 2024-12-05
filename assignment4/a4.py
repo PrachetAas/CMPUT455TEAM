@@ -36,11 +36,7 @@ class CommandInterface:
             "legal": self.legal,
             "genmove": self.genmove,
             "winner": self.winner,
-            "timelimit": self.timelimit,
-            # Add missing commands
-            "set_opponent": self.set_opponent,
-            "set_student_as_player": self.set_student_as_player,
-            "?play_game": self.play_game
+            "timelimit": self.timelimit
         }
         self.board = [[None]]
         self.player = 1
@@ -76,6 +72,7 @@ class CommandInterface:
         self.hash_value = 0
         self.eval_cache = {}
         self.start_time = 0
+        self.history = []
         signal.signal(signal.SIGALRM, handle_alarm)
 
     # ====================================================================================================================
@@ -107,11 +104,12 @@ class CommandInterface:
         new_interface.player = self.player
         # Copy other necessary attributes
         new_interface.max_genmove_time = self.max_genmove_time
-        new_interface.zobrist_table = self.zobrist_table
+        new_interface.zobrist_table = self.zobrist_table.copy()
         new_interface.hash_value = self.hash_value
         new_interface.eval_cache = self.eval_cache.copy()
-        new_interface.pattern_dict = self.pattern_dict
+        new_interface.pattern_dict = self.pattern_dict.copy()
         new_interface.history = self.history.copy()
+        new_interface.start_time = self.start_time
         return new_interface
 
     # Will continuously receive and execute commands
@@ -306,138 +304,18 @@ class CommandInterface:
     # VVVVVVVVVV Start of Assignment 4 functions. Add/modify as needed. VVVVVVVV
     # ===============================================================================================
 
-    # Set opponent command
-    def set_opponent(self, args):
-        if len(args) != 1:
-            print("Error: set_opponent requires one argument (the opponent's script filename).", file=sys.stderr)
-            return False
-        self.opponent_script = args[0]
-        return True
-
-    # Set student as player command
-    def set_student_as_player(self, args):
-        if len(args) != 1 or args[0] not in ['1', '2']:
-            print("Error: set_student_as_player requires one argument (1 or 2).", file=sys.stderr)
-            return False
-        self.student_player_num = int(args[0])
-        return True
-
-    # Play game command
-    def play_game(self, args):
-        # Check if opponent and student player number are set
-        if not hasattr(self, 'opponent_script'):
-            print("Error: Opponent script not set. Use set_opponent command.", file=sys.stderr)
-            return False
-        if not hasattr(self, 'student_player_num'):
-            print("Error: Student player number not set. Use set_student_as_player command.", file=sys.stderr)
-            return False
-
-        import subprocess
-
-        # Start the opponent process
-        opponent_process = subprocess.Popen(
-            ['python3', '-u', self.opponent_script],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1  # Line-buffered
-        )
-
-        current_player = 1
-        game_over = False
-
-        while not game_over:
-            print(f"Current player: {current_player}", file=sys.stderr)
-            if current_player == self.student_player_num:
-                # Your player's turn
-                move = self.genmove([])
-                print(f"Your move: {move}", file=sys.stderr)
-                if move == "resign":
-                    opponent_process.stdin.write("resign\n")
-                    opponent_process.stdin.flush()
-                    opponent_response = self.read_opponent_response(opponent_process)
-                    print(f"Opponent response after resign: {opponent_response}", file=sys.stderr)
-                    print(3 - self.student_player_num)
-                    game_over = True
-                else:
-                    # Apply your move
-                    self.play(move.strip().split())
-                    print(f"Applied your move: {move}", file=sys.stderr)
-                    # Send your move to the opponent
-                    opponent_process.stdin.write(f"play {move}\n")
-                    opponent_process.stdin.flush()
-                    opponent_response = self.read_opponent_response(opponent_process)
-                    print(f"Opponent response after play: {opponent_response}", file=sys.stderr)
-            else:
-                # Opponent's turn
-                opponent_process.stdin.write("genmove\n")
-                opponent_process.stdin.flush()
-                opponent_move = self.read_opponent_response(opponent_process)
-                print(f"Opponent move: {opponent_move}", file=sys.stderr)
-                if opponent_move == "resign":
-                    print(self.student_player_num)
-                    game_over = True
-                else:
-                    # Apply opponent's move
-                    self.play(opponent_move.strip().split())
-                    print(f"Applied opponent's move: {opponent_move}", file=sys.stderr)
-                    # Send the move back to the opponent to keep game states in sync
-                    opponent_process.stdin.write(f"play {opponent_move}\n")
-                    opponent_process.stdin.flush()
-                    opponent_response = self.read_opponent_response(opponent_process)
-                    print(f"Opponent response after play: {opponent_response}", file=sys.stderr)
-
-            # Check for game over
-            if self.is_terminal():
-                winner = 3 - current_player
-                print(winner)
-                game_over = True
-
-            current_player = 3 - current_player  # Switch player
-
-        opponent_process.terminate()
-        return True
-
-    def read_opponent_response(self, process):
-        response = ''
-        while True:
-            line = process.stdout.readline()
-            if not line:
-                break  # End of output
-            response += line
-            if line.strip() == '= 1' or line.strip() == '= -1':
-                break
-        # Extract the move from the response
-        lines = response.strip().split('\n')
-        move = ''
-        for line in lines:
-            line = line.strip()
-            if line and not line.startswith('='):
-                move = line
-                break
-        print(f"Opponent response: {response}", file=sys.stderr)
-        return move
-
     # MCTS Integration with Pattern-Based Enhancements
     def genmove(self, args):
         self.start_time = time.time()
+        signal.alarm(int(self.max_genmove_time - 2))  # Set the alarm, 2-second safety margin
         try:
-            moves = self.get_legal_moves()
-            if len(moves) == 0:
+            if len(self.get_legal_moves()) == 0:
                 print("resign")
                 return "resign"
 
-            best_move = None
-            best_weight = float('-inf')
-
-            # Evaluate each move and select the best one
-            for move in moves:
-                x, y, num = int(move[0]), int(move[1]), int(move[2])
-                weight = self.calculate_move_weight(x, y, num)
-                if weight > best_weight:
-                    best_weight = weight
-                    best_move = move
+            # Run MCTS to select the best move
+            itermax = 10000  # Adjust the number of iterations as appropriate
+            best_move = mcts(self.copy(), itermax)
 
             if best_move:
                 self.perform_move(best_move)
@@ -445,11 +323,17 @@ class CommandInterface:
                 print(move_str)
                 return move_str
             else:
-                rand_move = moves[random.randint(0, len(moves) - 1)]
-                self.perform_move(rand_move)
-                move_str = " ".join(rand_move)
-                print(move_str)
-                return move_str
+                # If MCTS didn't find a move, pick a random move
+                moves = self.get_legal_moves()
+                if moves:
+                    rand_move = moves[random.randint(0, len(moves) - 1)]
+                    self.perform_move(rand_move)
+                    move_str = " ".join(rand_move)
+                    print(move_str)
+                    return move_str
+                else:
+                    print("resign")
+                    return "resign"
 
         except TimeoutException:
             print("resign")
@@ -458,7 +342,8 @@ class CommandInterface:
             print(f"Exception in genmove: {e}", file=sys.stderr)
             print("resign")
             return "resign"
-
+        finally:
+            signal.alarm(0)  # Cancel the alarm
 
     # Additional Helper Functions (Zobrist, Board Handling)
     def initialize_zobrist_hash(self):
@@ -519,47 +404,47 @@ class CommandInterface:
             else:
                 return '?'
 
-    # Extract row and column patterns with symbols
+        # Extract row and column patterns with symbols
         row = ''.join([cell_to_symbol(cell) for cell in self.board[y]])
         col = ''.join([cell_to_symbol(self.board[i][x]) for i in range(len(self.board))])
 
-    # Check for patterns in the row
+        # Check for patterns in the row
         for i in range(len(row) - 2):
             pattern = row[i:i+3]
             pattern_tuple = (pattern,)
             if pattern_tuple in self.pattern_dict:
                 weight += self.pattern_dict[pattern_tuple]
 
-    # Check for patterns in the column
+        # Check for patterns in the column
         for i in range(len(col) - 2):
             pattern = col[i:i+3]
             pattern_tuple = (pattern,)
             if pattern_tuple in self.pattern_dict:
                 weight += self.pattern_dict[pattern_tuple]
 
-    # Additional heuristics: balance and blocking
+        # Additional heuristics: balance and blocking
         row_player = row.count('P')
         row_opponent = row.count('O')
         col_player = col.count('P')
         col_opponent = col.count('O')
 
-    # Penalize imbalance
+        # Penalize imbalance
         weight -= abs(row_player - row_opponent) * 5
         weight -= abs(col_player - col_opponent) * 5
 
-    # Reward moves that block opponent triples
+        # Reward moves that block opponent triples
         if 'OO.' in row or '.OO' in row or 'O.O' in row:
             weight += 50
         if 'OO.' in col or '.OO' in col or 'O.O' in col:
             weight += 50
 
-    # Reward moves that lead to player triples
+        # Reward moves that lead to player triples
         if 'PP.' in row or '.PP' in row or 'P.P' in row:
             weight += 30
         if 'PP.' in col or '.PP' in col or 'P.P' in col:
             weight += 30
 
-    # Remove the number after evaluation
+        # Remove the number after evaluation
         self.board[y][x] = None
 
         return weight
@@ -586,6 +471,9 @@ class MCTSNode:
 
     def expand(self):
         untried_moves = [move for move in self.state.get_legal_moves() if move not in [child.move for child in self.children]]
+        if not untried_moves:
+            return None
+
         weighted_moves = []
 
         # Assign pattern-based weights to the untried moves
@@ -614,22 +502,33 @@ class MCTSNode:
 # MCTS with Pattern-Based Rollouts
 def mcts(initial_state, itermax, exploration_weight=1.41):
     root = MCTSNode(initial_state)
-    start_time = time.time()
 
-    for _ in range(itermax):
+    while True:
         # Check if time limit is reached
-        if time.time() - start_time >= initial_state.max_genmove_time - 1:  # Leave a 1-second buffer
+        if time.time() - initial_state.start_time >= initial_state.max_genmove_time - 2:
             break
 
         node = root
         while node.is_fully_expanded() and node.children:
             node = node.best_child(exploration_weight)
+            # Time check
+            if time.time() - initial_state.start_time >= initial_state.max_genmove_time - 2:
+                break
 
         if not node.is_fully_expanded():
             node = node.expand()
+            # Time check
+            if time.time() - initial_state.start_time >= initial_state.max_genmove_time - 2:
+                break
+
+        if node is None:
+            break
 
         result = rollout(node.state)
         node.backpropagate(result)
+        # Time check
+        if time.time() - initial_state.start_time >= initial_state.max_genmove_time - 2:
+            break
 
     best_child = root.best_child(0)
     if best_child:
@@ -640,6 +539,10 @@ def mcts(initial_state, itermax, exploration_weight=1.41):
 def rollout(state):
     current_state = state.copy()
     while not current_state.is_terminal():
+        # Time check
+        if time.time() - state.start_time >= state.max_genmove_time - 2:
+            break
+
         # Calculate weights of moves based on patterns
         weighted_moves = []
         moves = current_state.get_legal_moves()
@@ -647,6 +550,9 @@ def rollout(state):
             x, y, num = int(move[0]), int(move[1]), int(move[2])
             weight = current_state.calculate_move_weight(x, y, num)
             weighted_moves.append((move, weight))
+
+        if not weighted_moves:
+            break
 
         # Normalize weights to probabilities
         total_weight = sum(weight for _, weight in weighted_moves)
@@ -673,4 +579,5 @@ def evaluate_winner(state):
 if __name__ == "__main__":
     interface = CommandInterface()
     interface.main_loop()
+
 
