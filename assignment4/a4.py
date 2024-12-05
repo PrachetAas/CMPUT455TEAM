@@ -11,6 +11,7 @@ import signal
 import time
 import math
 import numpy as np
+import traceback  # Added to print exceptions
 
 
 # Custom time out exception
@@ -93,8 +94,8 @@ class CommandInterface:
         try:
             return self.command_dict[command](args)
         except Exception as e:
-            print("Command '" + str + "' failed with exception:", file=sys.stderr)
-            print(e, file=sys.stderr)
+            print(f"Command '{str}' failed with exception:", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             print("= -1\n")
             return False
 
@@ -120,6 +121,8 @@ class CommandInterface:
                 str = input()
             except EOFError:
                 break
+            if str.strip() == "":
+                continue  # Skip empty lines
             if str.split(" ")[0] == "exit":
                 print("= 1\n")
                 return True
@@ -258,6 +261,7 @@ class CommandInterface:
             self.player = 2
         else:
             self.player = 1
+        print(f"Board after play {args}:\n{self.board_to_string()}", file=sys.stderr)
         return True
 
     def legal(self, args):
@@ -332,50 +336,57 @@ class CommandInterface:
 
         # Start the opponent process
         opponent_process = subprocess.Popen(
-            ['python3', self.opponent_script],
+            ['python3', '-u', self.opponent_script],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            bufsize=1
+            bufsize=1  # Line-buffered
         )
 
         current_player = 1
         game_over = False
 
         while not game_over:
+            print(f"Current player: {current_player}", file=sys.stderr)
             if current_player == self.student_player_num:
                 # Your player's turn
                 move = self.genmove([])
+                print(f"Your move: {move}", file=sys.stderr)
                 if move == "resign":
                     opponent_process.stdin.write("resign\n")
                     opponent_process.stdin.flush()
-                    winner = 3 - self.student_player_num
-                    print(winner)
+                    opponent_response = self.read_opponent_response(opponent_process)
+                    print(f"Opponent response after resign: {opponent_response}", file=sys.stderr)
+                    print(3 - self.student_player_num)
                     game_over = True
                 else:
                     # Apply your move
                     self.play(move.strip().split())
+                    print(f"Applied your move: {move}", file=sys.stderr)
                     # Send your move to the opponent
                     opponent_process.stdin.write(f"play {move}\n")
                     opponent_process.stdin.flush()
+                    opponent_response = self.read_opponent_response(opponent_process)
+                    print(f"Opponent response after play: {opponent_response}", file=sys.stderr)
             else:
                 # Opponent's turn
                 opponent_process.stdin.write("genmove\n")
                 opponent_process.stdin.flush()
-
-                # Read opponent's move
-                opponent_move = opponent_process.stdout.readline().strip()
+                opponent_move = self.read_opponent_response(opponent_process)
+                print(f"Opponent move: {opponent_move}", file=sys.stderr)
                 if opponent_move == "resign":
-                    winner = self.student_player_num
-                    print(winner)
+                    print(self.student_player_num)
                     game_over = True
                 else:
                     # Apply opponent's move
                     self.play(opponent_move.strip().split())
+                    print(f"Applied opponent's move: {opponent_move}", file=sys.stderr)
                     # Send the move back to the opponent to keep game states in sync
                     opponent_process.stdin.write(f"play {opponent_move}\n")
                     opponent_process.stdin.flush()
+                    opponent_response = self.read_opponent_response(opponent_process)
+                    print(f"Opponent response after play: {opponent_response}", file=sys.stderr)
 
             # Check for game over
             if self.is_terminal():
@@ -387,6 +398,26 @@ class CommandInterface:
 
         opponent_process.terminate()
         return True
+
+    def read_opponent_response(self, process):
+        response = ''
+        while True:
+            line = process.stdout.readline()
+            if not line:
+                break  # End of output
+            response += line
+            if line.strip() == '= 1' or line.strip() == '= -1':
+                break
+        # Extract the move from the response
+        lines = response.strip().split('\n')
+        move = ''
+        for line in lines:
+            line = line.strip()
+            if line and not line.startswith('='):
+                move = line
+                break
+        print(f"Opponent response: {response}", file=sys.stderr)
+        return move
 
     # MCTS Integration with Pattern-Based Enhancements
     def genmove(self, args):
@@ -416,6 +447,7 @@ class CommandInterface:
             return "resign"
         except Exception as e:
             print(f"Exception in genmove: {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             print("resign")
             return "resign"
 
@@ -440,7 +472,11 @@ class CommandInterface:
         self.update_zobrist_hash(x, y, num)
         self.history.append((y, x, num))
         self.player = 2 if self.player == 1 else 1
+        print(f"Board after move {move}:\n{self.board_to_string()}", file=sys.stderr)
         return True
+
+    def board_to_string(self):
+        return '\n'.join([''.join(['.' if cell is None else str(cell) for cell in row]) for row in self.board])
 
     # Terminal Check Function
     def is_terminal(self):
