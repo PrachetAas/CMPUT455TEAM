@@ -40,7 +40,7 @@ class Node:
         for y in range(len(self.state)):
             for x in range(len(self.state[0])):
                 for num in range(2):
-                    legal, _ = self.is_legal(self.state, x, y, num)
+                    legal, _ = self.is_legal(x, y, num)
                     if legal:
                         moves.append((str(x), str(y), str(num)))
         return moves
@@ -320,7 +320,7 @@ class CommandInterface:
     def make_move(self, board, move):
         x, y, num = move
         new_board = copy.deepcopy(board)
-        new_board[y][x] = num
+        new_board[int(y)][int(x)] = num
         return new_board
 
     def expand_node(self, node):
@@ -334,22 +334,57 @@ class CommandInterface:
         current_state = copy.deepcopy(node.state)
         current_player = node.player
         while True:
-            moves = node.get_legal_moves()
+            moves = self.get_legal_moves_state(current_state)
             if not moves:
                 return 3 - current_player  # The opponent wins
             move = random.choice(moves)
             current_state = self.make_move(current_state, move)
             current_player = 3 - current_player
 
-    # def get_legal_moves_state(self, state):
-    #     moves = []
-    #     for y in range(len(state)):
-    #         for x in range(len(state[0])):
-    #             for num in range(2):
-    #                 legal, _ = self.is_legal(state, x, y, num)
-    #                 if legal:
-    #                     moves.append((x, y, num))
-    #     return moves
+    def get_legal_moves_state(self, state):
+        moves = []
+        for y in range(len(state)):
+            for x in range(len(state[0])):
+                for num in range(2):
+                    legal, _ = self.is_legal_state(state, x, y, num)
+                    if legal:
+                        moves.append((x, y, num))
+        return moves
+    
+    def is_legal_state(self, state, x, y, num):
+        if state[y][x] is not None:
+            return False, "occupied"
+        
+        consecutive = 0
+        count = 0
+        state[y][x] = num
+        for row in range(len(state)):
+            if state[row][x] == num:
+                count += 1
+                consecutive += 1
+                if consecutive >= 3:
+                    state[y][x] = None
+                    return False, "three in a row"
+            else:
+                consecutive = 0
+        too_many = count > len(state) // 2 + len(state) % 2
+        
+        consecutive = 0
+        count = 0
+        for col in range(len(state[0])):
+            if state[y][col] == num:
+                count += 1
+                consecutive += 1
+                if consecutive >= 3:
+                    state[y][x] = None
+                    return False, "three in a row"
+            else:
+                consecutive = 0
+        if too_many or count > len(state[0]) // 2 + len(state[0]) % 2:
+            state[y][x] = None
+            return False, "too many " + str(num)
+        state[y][x] = None
+        return True, ""
 
     def backpropagate(self, node, winner):
         while node is not None:
