@@ -13,9 +13,79 @@ import time
 class TimeoutException(Exception):
     pass
 
-# Function that is called when we reach the time limit
 def handle_alarm(signum, frame):
     raise TimeoutException
+
+class Node:
+    def __init__(self, state, parent, move, player):
+        self.state = state  
+        self.parent = parent
+        self.move = move  
+        self.player = player  
+        self.wins = 0
+        self.visits = 0
+        self.children = []
+        self.untried_moves = []
+        if not self.is_terminal():
+            self.untried_moves = self.get_legal_moves()
+    
+    def is_terminal(self):
+        return len(self.get_legal_moves()) == 0
+
+    def get_legal_moves(self):
+        moves = []
+        for y in range(len(self.state)):
+            for x in range(len(self.state[0])):
+                for num in range(2):
+                    legal, _ = self.is_legal(x, y, num)
+                    if legal:
+                        moves.append((str(x), str(y), str(num)))
+        return moves
+
+    def UCT_select_child(self):
+        return max(self.children, key=lambda child: self.uct_value(child))
+    
+    def uct_value(self, child):
+        """Calculate the UCT value for a child node."""
+        if child.visits == 0:
+            return float('inf')
+        return (child.wins / child.visits) + 1.414 * math.sqrt(math.log(self.visits) / child.visits)
+    
+    def is_legal(self, x, y, num):
+        if self.state[y][x] is not None:
+            return False, "occupied"
+        
+        consecutive = 0
+        count = 0
+        self.state[y][x] = num
+        for row in range(len(self.state)):
+            if self.state[row][x] == num:
+                count += 1
+                consecutive += 1
+                if consecutive >= 3:
+                    self.state[y][x] = None
+                    return False, "three in a row"
+            else:
+                consecutive = 0
+        too_many = count > len(self.state) // 2 + len(self.state) % 2
+        
+        consecutive = 0
+        count = 0
+        for col in range(len(self.state[0])):
+            if self.state[y][col] == num:
+                count += 1
+                consecutive += 1
+                if consecutive >= 3:
+                    self.state[y][x] = None
+                    return False, "three in a row"
+            else:
+                consecutive = 0
+        if too_many or count > len(self.state[0]) // 2 + len(self.state[0]) % 2:
+            self.state[y][x] = None
+            return False, "too many " + str(num)
+
+        self.state[y][x] = None
+        return True, ""
 
 class CommandInterface:
 
@@ -235,105 +305,156 @@ class CommandInterface:
     # VVVVVVVVVV Start of Assignment 4 functions. Add/modify as needed. VVVVVVVV
     #===============================================================================================
 
-    def uct_value(self, total_visits, node_wins, node_visits):
-        """Calculate the UCT value for a node."""
-        if node_visits == 0:
-            return float('inf')
-        return (node_wins / node_visits) + 1.414 * math.sqrt(math.log(total_visits) / node_visits)
-
-    def simulate_random_game(self, current_board, current_player):
-        """Simulate a random game from the current position."""
-        board = copy.deepcopy(current_board)
-        player = current_player
-        
-        while True:
-            moves = []
-            for y in range(len(board)):
-                for x in range(len(board[0])):
-                    for num in range(2):
-                        temp_board = copy.deepcopy(board)
-                        if temp_board[y][x] is None:
-                            temp_board[y][x] = num
-                            legal, _ = self.is_legal(x, y, num)
-                            if legal:
-                                moves.append((x, y, num))
-            
-            if not moves:
-                # No legal moves, current player loses
-                return 3 - player
-            
-            x, y, num = random.choice(moves)
-            board[y][x] = num
-            player = 3 - player
-
-    def evaluate_move(self, move, simulations=10):
-        """Evaluate a move by running multiple random simulations."""
+    def select_node(self, node):
+        while not node.is_terminal():
+            if node.untried_moves:
+                return self.expand(node)
+            else:
+                node = node.UCT_select_child()
+        return node
+    
+    def make_move(self, board, move):
         x, y, num = move
-        wins = 0
+        new_state = copy.deepcopy(board)
+        new_state[int(y)][int(x)] = num
+        return new_state
+
+    def expand(self, node):
+        move = node.untried_moves.pop()
+        next_state = self.make_move(node.state, move)
+        child_node = Node(state=next_state, parent=node, move=move, player=3 - node.player)
+        node.children.append(child_node)
+        return child_node
+    
+    def simulate(self, node):
+        current_state = copy.deepcopy(node.state)
+        current_player = node.player
+        while True:
+            moves = self.get_legal_moves_with_state(current_state)
+            if not moves:
+                return 3 - current_player 
+            move = self.select_move(current_state, moves, current_player)
+            current_state = self.make_move(current_state, move)
+            current_player = 3 - current_player
+    
+    def select_move(self, state, moves, player):
+        # Simple heuristic: prioritize moves that prevent 'three in a row'
+        best_moves = []
+        for move in moves:
+            x, y, num = move
+
+            state[y][x] = num
+
+            opponent = 3 - player
+            opponent_has_three = self.check_three_in_row(state, opponent)
+            state[y][x] = None
+            if not opponent_has_three:
+                best_moves.append(move)
+        if best_moves:
+            return random.choice(best_moves)
+        else:
+            # If all moves result in opponent's 'three in a row', pick randomly
+            return random.choice(moves)
         
-        # Create a copy of the current state
-        temp_board = copy.deepcopy(self.board)
-        temp_board[y][x] = num
-        next_player = 3 - self.player
+    def check_three_in_row(self, state, player):
+
+        for y in range(len(state)):
+            consecutive = 0
+            for x in range(len(state[0])):
+                if state[y][x] == player:
+                    consecutive += 1
+                    if consecutive >= 3:
+                        return True
+                else:
+                    consecutive = 0
+        for x in range(len(state[0])):
+            consecutive = 0
+            for y in range(len(state)):
+                if state[y][x] == player:
+                    consecutive += 1
+                    if consecutive >= 3:
+                        return True
+                else:
+                    consecutive = 0
+        return False
+
+
+    def get_legal_moves_with_state(self, state):
+        moves = []
+        for y in range(len(state)):
+            for x in range(len(state[0])):
+                for num in range(2):
+                    legal, _ = self.is_legal_state(state, x, y, num)
+                    if legal:
+                        moves.append((x, y, num))
+        return moves
+    
+    def is_legal_state(self, state, x, y, num):
+    # Same as is_legal above but takes state/board param instead and uses that instead of self.board
+        if state[y][x] is not None:
+            return False, "occupied"
         
-        # Run simulations from the resulting position
-        for _ in range(simulations):
-            winner = self.simulate_random_game(temp_board, next_player)
-            if winner != next_player:  # If the opponent (next_player) loses
-                wins += 1
-                
-        return wins / simulations
+        consecutive = 0
+        count = 0
+        state[y][x] = num
+        for row in range(len(state)):
+            if state[row][x] == num:
+                count += 1
+                consecutive += 1
+                if consecutive >= 3:
+                    state[y][x] = None
+                    return False, "three in a row"
+            else:
+                consecutive = 0
+        too_many = count > len(state) // 2 + len(state) % 2
+        
+        consecutive = 0
+        count = 0
+        for col in range(len(state[0])):
+            if state[y][col] == num:
+                count += 1
+                consecutive += 1
+                if consecutive >= 3:
+                    state[y][x] = None
+                    return False, "three in a row"
+            else:
+                consecutive = 0
+        if too_many or count > len(state[0]) // 2 + len(state[0]) % 2:
+            state[y][x] = None
+            return False, "too many " + str(num)
+        state[y][x] = None
+        return True, ""
+
+    def backpropagate(self, node, winner):
+        while node is not None:
+            node.visits += 1
+            if node.player == winner:
+                node.wins += 1
+            node = node.parent
 
     def genmove(self, args):
         try:
             signal.alarm(self.max_genmove_time)
+            curr_board = copy.deepcopy(self.board)
+            curr_node = Node(state=curr_board, parent=None, move=None, player=self.player)
             
-            # Get all legal moves
-            moves = []
-            for y in range(len(self.board)):
-                for x in range(len(self.board[0])):
-                    for num in range(2):
-                        legal, _ = self.is_legal(x, y, num)
-                        if legal:
-                            moves.append((x, y, num))
-            
-            if not moves:
-                print("resign")
-                return True
-            
-            # Evaluate each move
-            best_move = None
-            best_score = -1
-            
-            # Calculate how many simulations we can do per move
-            time_per_move = (self.max_genmove_time - 0.5) / len(moves)
             start_time = time.time()
-            simulations_per_move = 30  # Start with a reasonable number
+            while time.time() - start_time < self.max_genmove_time - 0.5:
+                # MCTS
+                node = self.select_node(curr_node)
+                winner = self.simulate(node)
+                self.backpropagate(node, winner)
             
-            for move in moves:
-                if time.time() - start_time > self.max_genmove_time - 0.5:
-                    break
-                
-                score = self.evaluate_move(move, simulations_per_move)
-                if score > best_score:
-                    best_score = score
-                    best_move = move
+            best_child = max(curr_node.children, key=lambda child: child.visits)
+            best_move = best_child.move
             
-            if best_move is None:
-                # Fallback to random move if evaluation fails
-                best_move = random.choice(moves)
-            
-            # Convert move to string format and play it
-            move_str = [str(best_move[0]), str(best_move[1]), str(best_move[2])]
-            self.play(move_str)
-            print(" ".join(move_str))
+            self.play([str(best_move[0]), str(best_move[1]), str(best_move[2])])
             
             signal.alarm(0)
-            
         except TimeoutException:
             print("resign")
-            
         return True
+
     
     #===============================================================================================
     # ɅɅɅɅɅɅɅɅɅɅ End of Assignment 4 functions. ɅɅɅɅɅɅɅɅɅɅ
