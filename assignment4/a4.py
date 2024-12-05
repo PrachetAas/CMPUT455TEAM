@@ -48,27 +48,27 @@ class CommandInterface:
         # Define pattern_dict with dynamic patterns
         self.pattern_dict = {
             # Illegal patterns (heavily penalized)
-            ('PPP',): -1000,
-            ('OOO',): -1000,
+            ('PPP',): -1000,  # Player triple (violates rule)
+            ('OOO',): -1000,  # Opponent triple (violates rule)
 
             # Opponent's potential triples (block them)
-            ('OO.',): 50,
-            ('.OO',): 50,
-            ('O.O',): 50,
+            ('OO.',): 100,
+            ('.OO',): 100,
+            ('O.O',): 100,
 
-            # Our potential triples (avoid completing them)
-            ('PP.',): -50,
-            ('.PP',): -50,
-            ('P.P',): -50,
-
-            # Balanced patterns (encouraged)
-            ('P.O',): 10,
-            ('O.P',): 10,
-            ('.P.',): 20,
-            ('.O.',): 20,
+            # Player's potential triples (encourage them)
+            ('PP.',): 50,
+            ('.PP',): 50,
+            ('P.P',): 50,
 
             # Neutral patterns
-            ('...',): 5,
+            ('...',): 10,
+
+            # Blocking patterns (neutralize threats)
+            ('P.O',): 20,
+            ('O.P',): 20,
+            ('.P.',): 30,
+            ('.O.',): 30,
         }
 
         self.transposition_table = {}
@@ -428,7 +428,16 @@ class CommandInterface:
                 print("resign")
                 return "resign"
 
-            best_move = mcts(self, itermax=1000)  # Adjust itermax as needed
+            best_move = None
+            best_weight = float('-inf')
+
+            # Evaluate each move and select the best one
+            for move in moves:
+                x, y, num = int(move[0]), int(move[1]), int(move[2])
+                weight = self.calculate_move_weight(x, y, num)
+                if weight > best_weight:
+                    best_weight = weight
+                    best_move = move
 
             if best_move:
                 self.perform_move(best_move)
@@ -447,9 +456,9 @@ class CommandInterface:
             return "resign"
         except Exception as e:
             print(f"Exception in genmove: {e}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
             print("resign")
             return "resign"
+
 
     # Additional Helper Functions (Zobrist, Board Handling)
     def initialize_zobrist_hash(self):
@@ -510,41 +519,47 @@ class CommandInterface:
             else:
                 return '?'
 
-        # Extract row and column patterns with symbols
+    # Extract row and column patterns with symbols
         row = ''.join([cell_to_symbol(cell) for cell in self.board[y]])
         col = ''.join([cell_to_symbol(self.board[i][x]) for i in range(len(self.board))])
 
-        # Check for patterns in the row
+    # Check for patterns in the row
         for i in range(len(row) - 2):
             pattern = row[i:i+3]
             pattern_tuple = (pattern,)
             if pattern_tuple in self.pattern_dict:
                 weight += self.pattern_dict[pattern_tuple]
 
-        # Check for patterns in the column
+    # Check for patterns in the column
         for i in range(len(col) - 2):
             pattern = col[i:i+3]
             pattern_tuple = (pattern,)
             if pattern_tuple in self.pattern_dict:
                 weight += self.pattern_dict[pattern_tuple]
 
-        # Additional heuristics: balance the number of player's symbols and opponent's in the row and column
+    # Additional heuristics: balance and blocking
         row_player = row.count('P')
         row_opponent = row.count('O')
         col_player = col.count('P')
         col_opponent = col.count('O')
 
-        # Penalize imbalance
+    # Penalize imbalance
         weight -= abs(row_player - row_opponent) * 5
         weight -= abs(col_player - col_opponent) * 5
 
-        # Reward moves that lead to balance
-        if abs((row_player + 1) - row_opponent) < abs(row_player - row_opponent):
-            weight += 10
-        if abs((col_player + 1) - col_opponent) < abs(col_player - col_opponent):
-            weight += 10
+    # Reward moves that block opponent triples
+        if 'OO.' in row or '.OO' in row or 'O.O' in row:
+            weight += 50
+        if 'OO.' in col or '.OO' in col or 'O.O' in col:
+            weight += 50
 
-        # Remove the number after evaluation
+    # Reward moves that lead to player triples
+        if 'PP.' in row or '.PP' in row or 'P.P' in row:
+            weight += 30
+        if 'PP.' in col or '.PP' in col or 'P.P' in col:
+            weight += 30
+
+    # Remove the number after evaluation
         self.board[y][x] = None
 
         return weight
