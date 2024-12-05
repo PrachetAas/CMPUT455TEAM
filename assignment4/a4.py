@@ -37,6 +37,7 @@ class CommandInterface:
         self.board = [[None]]
         self.player = 1
         self.max_genmove_time = 1
+        self.pattern_dict = {}
 
         self.transposition_table = {}
         self.zobrist_table = {}
@@ -65,6 +66,19 @@ class CommandInterface:
             print(e, file=sys.stderr)
             print("= -1\n")
             return False
+    def copy(self):
+        new_interface = CommandInterface()
+    # Deep copy the board
+        new_interface.board = [row.copy() for row in self.board]
+    # Copy the player
+        new_interface.player = self.player
+    # Copy other necessary attributes
+        new_interface.max_genmove_time = self.max_genmove_time
+        new_interface.zobrist_table = self.zobrist_table 
+        new_interface.hash_value = self.hash_value
+        new_interface.eval_cache = self.eval_cache.copy()
+    
+        return new_interface
 
     # Will continuously receive and execute commands
     # Commands should return True on success, and False on failure
@@ -365,21 +379,30 @@ class CommandInterface:
             moves = self.get_legal_moves()
             if len(moves) == 0:
                 print("resign")
-                return True
+                return "resign"
 
-            best_move = mcts(self, itermax=1000)  # Adjust itermax for more simulations
+            best_move = mcts(self, itermax=10000)  # Adjust itermax as needed
 
             if best_move:
                 self.perform_move(best_move)
-                print(" ".join(best_move))
+                move_str = " ".join(best_move)
+                print(move_str)
+                return move_str
             else:
                 rand_move = moves[random.randint(0, len(moves) - 1)]
                 self.perform_move(rand_move)
-                print(" ".join(rand_move))
+                move_str = " ".join(rand_move)
+                print(move_str)
+                return move_str
 
         except TimeoutException:
             print("resign")
-        return True
+            return "resign"
+        except Exception as e:
+            print(f"Exception in genmove: {e}", file=sys.stderr)
+            print("resign")
+            return "resign"
+
 
     # Additional Helper Functions (Zobrist, Board Handling)
     def initialize_zobrist_hash(self):
@@ -459,8 +482,13 @@ class MCTSNode:
 # MCTS with Pattern-Based Rollouts
 def mcts(initial_state, itermax, exploration_weight=1.41):
     root = MCTSNode(initial_state)
+    start_time = time.time()
 
     for _ in range(itermax):
+        # Check if time limit is reached
+        if time.time() - start_time >= initial_state.max_genmove_time - 1:  # Leave a 1-second buffer
+            break
+
         node = root
         while node.is_fully_expanded() and node.children:
             node = node.best_child(exploration_weight)
@@ -471,7 +499,12 @@ def mcts(initial_state, itermax, exploration_weight=1.41):
         result = rollout(node.state)
         node.backpropagate(result)
 
-    return root.best_child(0).move
+    best_child = root.best_child(0)
+    if best_child:
+        return best_child.move
+    else:
+        return None
+
 
 def rollout(state):
     current_state = state.copy()
