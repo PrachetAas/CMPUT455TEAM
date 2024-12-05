@@ -356,13 +356,13 @@ class CommandInterface:
                     opponent_process.stdin.flush()
                     opponent_response = self.read_opponent_response(opponent_process)
 
+            current_player = 3 - current_player  # Switch player
+
             # Check for game over
             if self.is_terminal():
-                winner = current_player
+                winner = 3 - current_player  # The player who just played
                 print(winner)
                 game_over = True
-
-            current_player = 3 - current_player  # Switch player
 
         opponent_process.terminate()
         return True
@@ -469,26 +469,29 @@ class CommandInterface:
 
 # MCTSNode class with Simplified Rollouts
 class MCTSNode:
-    def __init__(self, state, parent=None, move=None):
+    def __init__(self, state, parent=None, move=None, root_player=1):
         self.state = state
         self.parent = parent
         self.children = []
         self.visits = 0
         self.value = 0
         self.move = move
+        self.root_player = root_player
 
     def is_fully_expanded(self):
         return len(self.children) == len(self.state.get_legal_moves())
 
     def best_child(self, exploration_weight=math.sqrt(2)):
         choices_weights = [
-            (child.value / (child.visits + 1e-6)) + exploration_weight * math.sqrt((2 * math.log(self.visits + 1e-6)) / (child.visits + 1e-6))
+            (child.value / (child.visits + 1e-6)) + exploration_weight * math.sqrt(
+                (2 * math.log(self.visits + 1e-6)) / (child.visits + 1e-6))
             for child in self.children
         ]
         return self.children[np.argmax(choices_weights)]
 
     def expand(self):
-        untried_moves = [move for move in self.state.get_legal_moves() if move not in [child.move for child in self.children]]
+        untried_moves = [move for move in self.state.get_legal_moves() if
+                         move not in [child.move for child in self.children]]
         if not untried_moves:
             return None
 
@@ -496,7 +499,7 @@ class MCTSNode:
         move = random.choice(untried_moves)
         new_state = self.state.copy()
         new_state.perform_move(move)
-        child_node = MCTSNode(new_state, parent=self, move=move)
+        child_node = MCTSNode(new_state, parent=self, move=move, root_player=self.root_player)
         self.children.append(child_node)
         return child_node
 
@@ -508,7 +511,8 @@ class MCTSNode:
 
 # MCTS with Random Rollouts
 def mcts(initial_state, itermax, exploration_weight=math.sqrt(2)):
-    root = MCTSNode(initial_state)
+    root_player = initial_state.player
+    root = MCTSNode(initial_state, root_player=root_player)
 
     while True:
         # Check if time limit is reached
@@ -531,7 +535,7 @@ def mcts(initial_state, itermax, exploration_weight=math.sqrt(2)):
         if node is None:
             break
 
-        result = rollout(node.state)
+        result = rollout(node.state, root_player)
         node.backpropagate(result)
         # Time check
         if time.time() - initial_state.start_time >= initial_state.max_genmove_time - 2:
@@ -543,7 +547,7 @@ def mcts(initial_state, itermax, exploration_weight=math.sqrt(2)):
     else:
         return None
 
-def rollout(state):
+def rollout(state, root_player):
     current_state = state.copy()
     while not current_state.is_terminal():
         # Time check
@@ -557,15 +561,18 @@ def rollout(state):
         selected_move = random.choice(moves)
         current_state.perform_move(selected_move)
 
-    return evaluate_winner(current_state)
+    return evaluate_winner(current_state, root_player)
 
-def evaluate_winner(state):
+def evaluate_winner(state, root_player):
     if state.is_terminal():
-        return 1 if state.player != 1 else -1
+        winner = 3 - state.player  # The player who just played
+        if winner == root_player:
+            return 1  # Win for root player
+        else:
+            return -1  # Loss for root player
     return 0
 
 if __name__ == "__main__":
     interface = CommandInterface()
     interface.main_loop()
-
 
