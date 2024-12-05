@@ -42,7 +42,7 @@ class Node:
                 for num in range(2):
                     legal, _ = self.is_legal(self.state, x, y, num)
                     if legal:
-                        moves.append((x, y, num))
+                        moves.append((str(x), str(y), str(num)))
         return moves
 
     def UCT_select_child(self):
@@ -55,40 +55,40 @@ class Node:
             return float('inf')
         return (child.wins / child.visits) + 1.414 * math.sqrt(math.log(self.visits) / child.visits)
     
-    def is_legal(self, board, x, y, num):
-        if board[y][x] is not None:
+    def is_legal(self, x, y, num):
+        if self.state[y][x] is not None:
             return False, "occupied"
         
         consecutive = 0
         count = 0
-        board[y][x] = num
-        for row in range(len(board)):
-            if board[row][x] == num:
+        self.state[y][x] = num
+        for row in range(len(self.state)):
+            if self.state[row][x] == num:
                 count += 1
                 consecutive += 1
                 if consecutive >= 3:
-                    board[y][x] = None
+                    self.state[y][x] = None
                     return False, "three in a row"
             else:
                 consecutive = 0
-        too_many = count > len(board) // 2 + len(board) % 2
+        too_many = count > len(self.state) // 2 + len(self.state) % 2
         
         consecutive = 0
         count = 0
-        for col in range(len(board[0])):
-            if board[y][col] == num:
+        for col in range(len(self.state[0])):
+            if self.state[y][col] == num:
                 count += 1
                 consecutive += 1
                 if consecutive >= 3:
-                    board[y][x] = None
+                    self.state[y][x] = None
                     return False, "three in a row"
             else:
                 consecutive = 0
-        if too_many or count > len(board[0]) // 2 + len(board[0]) % 2:
-            board[y][x] = None
+        if too_many or count > len(self.state[0]) // 2 + len(self.state[0]) % 2:
+            self.state[y][x] = None
             return False, "too many " + str(num)
-        
-        board[y][x] = None
+
+        self.state[y][x] = None
         return True, ""
 
 class CommandInterface:
@@ -309,12 +309,6 @@ class CommandInterface:
     # VVVVVVVVVV Start of Assignment 4 functions. Add/modify as needed. VVVVVVVV
     #===============================================================================================
 
-    def uct_value(self, total_visits, node_wins, node_visits):
-        """Calculate the UCT value for a node."""
-        if node_visits == 0:
-            return float('inf')
-        return (node_wins / node_visits) + 1.414 * math.sqrt(math.log(total_visits) / node_visits)
-
     def select_node(self, node):
         while not node.is_terminal():
             if node.untried_moves:
@@ -340,22 +334,22 @@ class CommandInterface:
         current_state = copy.deepcopy(node.state)
         current_player = node.player
         while True:
-            moves = self.get_legal_moves_state(current_state)
+            moves = node.get_legal_moves()
             if not moves:
                 return 3 - current_player  # The opponent wins
             move = random.choice(moves)
             current_state = self.make_move(current_state, move)
             current_player = 3 - current_player
 
-    def get_legal_moves_state(self, state):
-        moves = []
-        for y in range(len(state)):
-            for x in range(len(state[0])):
-                for num in range(2):
-                    legal, _ = self.is_legal(state, x, y, num)
-                    if legal:
-                        moves.append((x, y, num))
-        return moves
+    # def get_legal_moves_state(self, state):
+    #     moves = []
+    #     for y in range(len(state)):
+    #         for x in range(len(state[0])):
+    #             for num in range(2):
+    #                 legal, _ = self.is_legal(state, x, y, num)
+    #                 if legal:
+    #                     moves.append((x, y, num))
+    #     return moves
 
     def backpropagate(self, node, winner):
         while node is not None:
