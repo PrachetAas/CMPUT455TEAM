@@ -13,21 +13,19 @@ import time
 class TimeoutException(Exception):
     pass
 
-# Function that is called when we reach the time limit
 def handle_alarm(signum, frame):
     raise TimeoutException
 
 class Node:
     def __init__(self, state, parent, move, player):
-        self.state = state  # Board state at this node
+        self.state = state  
         self.parent = parent
-        self.move = move  # The move that led to this node
-        self.player = player  # The player who made the move
+        self.move = move  
+        self.player = player  
         self.wins = 0
         self.visits = 0
         self.children = []
         self.untried_moves = []
-        # Initialize untried moves if this is not a terminal node
         if not self.is_terminal():
             self.untried_moves = self.get_legal_moves()
     
@@ -35,7 +33,6 @@ class Node:
         return len(self.get_legal_moves()) == 0
 
     def get_legal_moves(self):
-        # Implement logic to get legal moves from this node's state
         moves = []
         for y in range(len(self.state)):
             for x in range(len(self.state[0])):
@@ -46,7 +43,6 @@ class Node:
         return moves
 
     def UCT_select_child(self):
-        # Use UCT to select a child node
         return max(self.children, key=lambda child: self.uct_value(child))
     
     def uct_value(self, child):
@@ -312,18 +308,18 @@ class CommandInterface:
     def select_node(self, node):
         while not node.is_terminal():
             if node.untried_moves:
-                return self.expand_node(node)
+                return self.expand(node)
             else:
                 node = node.UCT_select_child()
         return node
     
     def make_move(self, board, move):
         x, y, num = move
-        new_board = copy.deepcopy(board)
-        new_board[int(y)][int(x)] = num
-        return new_board
+        new_state = copy.deepcopy(board)
+        new_state[int(y)][int(x)] = num
+        return new_state
 
-    def expand_node(self, node):
+    def expand(self, node):
         move = node.untried_moves.pop()
         next_state = self.make_move(node.state, move)
         child_node = Node(state=next_state, parent=node, move=move, player=3 - node.player)
@@ -334,14 +330,56 @@ class CommandInterface:
         current_state = copy.deepcopy(node.state)
         current_player = node.player
         while True:
-            moves = self.get_legal_moves_state(current_state)
+            moves = self.get_legal_moves_with_state(current_state)
             if not moves:
-                return 3 - current_player  # The opponent wins
-            move = random.choice(moves)
+                return 3 - current_player 
+            move = self.select_move(current_state, moves, current_player)
             current_state = self.make_move(current_state, move)
             current_player = 3 - current_player
+    
+    def select_move(self, state, moves, player):
+        # Simple heuristic: prioritize moves that prevent 'three in a row'
+        best_moves = []
+        for move in moves:
+            x, y, num = move
 
-    def get_legal_moves_state(self, state):
+            state[y][x] = num
+
+            opponent = 3 - player
+            opponent_has_three = self.check_three_in_row(state, opponent)
+            state[y][x] = None
+            if not opponent_has_three:
+                best_moves.append(move)
+        if best_moves:
+            return random.choice(best_moves)
+        else:
+            # If all moves result in opponent's 'three in a row', pick randomly
+            return random.choice(moves)
+        
+    def check_three_in_row(self, state, player):
+
+        for y in range(len(state)):
+            consecutive = 0
+            for x in range(len(state[0])):
+                if state[y][x] == player:
+                    consecutive += 1
+                    if consecutive >= 3:
+                        return True
+                else:
+                    consecutive = 0
+        for x in range(len(state[0])):
+            consecutive = 0
+            for y in range(len(state)):
+                if state[y][x] == player:
+                    consecutive += 1
+                    if consecutive >= 3:
+                        return True
+                else:
+                    consecutive = 0
+        return False
+
+
+    def get_legal_moves_with_state(self, state):
         moves = []
         for y in range(len(state)):
             for x in range(len(state[0])):
@@ -352,6 +390,7 @@ class CommandInterface:
         return moves
     
     def is_legal_state(self, state, x, y, num):
+    # Same as is_legal above but takes state/board param instead and uses that instead of self.board
         if state[y][x] is not None:
             return False, "occupied"
         
@@ -396,22 +435,20 @@ class CommandInterface:
     def genmove(self, args):
         try:
             signal.alarm(self.max_genmove_time)
-            root_state = copy.deepcopy(self.board)
-            root_node = Node(state=root_state, parent=None, move=None, player=self.player)
+            curr_board = copy.deepcopy(self.board)
+            curr_node = Node(state=curr_board, parent=None, move=None, player=self.player)
             
             start_time = time.time()
-            while time.time() - start_time < self.max_genmove_time - 0.1:
-                node = self.select_node(root_node)
+            while time.time() - start_time < self.max_genmove_time - 0.5:
+                # MCTS
+                node = self.select_node(curr_node)
                 winner = self.simulate(node)
                 self.backpropagate(node, winner)
             
-            # Choose the move with the highest visit count
-            best_child = max(root_node.children, key=lambda child: child.visits)
+            best_child = max(curr_node.children, key=lambda child: child.visits)
             best_move = best_child.move
             
-            # Play the best move
             self.play([str(best_move[0]), str(best_move[1]), str(best_move[2])])
-            print(f"{best_move[0]} {best_move[1]} {best_move[2]}")
             
             signal.alarm(0)
         except TimeoutException:
