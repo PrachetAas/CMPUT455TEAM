@@ -2,6 +2,9 @@
 # Implement the specified commands to complete the assignment
 # Full assignment specification here: https://webdocs.cs.ualberta.ca/~mmueller/courses/cmput455/assignments/a4.html
 
+# CMPUT 455 Assignment 4 starter code
+# Implement the specified commands to complete the assignment
+
 import sys
 import random
 import signal
@@ -32,12 +35,40 @@ class CommandInterface:
             "legal": self.legal,
             "genmove": self.genmove,
             "winner": self.winner,
-            "timelimit": self.timelimit
+            "timelimit": self.timelimit,
+            # Add missing commands
+            "set_opponent": self.set_opponent,
+            "set_student_as_player": self.set_student_as_player,
+            "?play_game": self.play_game
         }
         self.board = [[None]]
         self.player = 1
         self.max_genmove_time = 1
-        self.pattern_dict = {}
+        # Define pattern_dict with dynamic patterns
+        self.pattern_dict = {
+            # Illegal patterns (heavily penalized)
+            ('PPP',): -1000,
+            ('OOO',): -1000,
+
+            # Opponent's potential triples (block them)
+            ('OO.',): 50,
+            ('.OO',): 50,
+            ('O.O',): 50,
+
+            # Our potential triples (avoid completing them)
+            ('PP.',): -50,
+            ('.PP',): -50,
+            ('P.P',): -50,
+
+            # Balanced patterns (encouraged)
+            ('P.O',): 10,
+            ('O.P',): 10,
+            ('.P.',): 20,
+            ('.O.',): 20,
+
+            # Neutral patterns
+            ('...',): 5,
+        }
 
         self.transposition_table = {}
         self.zobrist_table = {}
@@ -56,7 +87,7 @@ class CommandInterface:
         command = str.split(" ")[0]
         args = [x for x in str.split(" ")[1:] if len(x) > 0]
         if command not in self.command_dict:
-            print("? Uknown command.\nType 'help' to list known commands.", file=sys.stderr)
+            print("? Unknown command.\nType 'help' to list known commands.", file=sys.stderr)
             print("= -1\n")
             return False
         try:
@@ -66,26 +97,29 @@ class CommandInterface:
             print(e, file=sys.stderr)
             print("= -1\n")
             return False
+
     def copy(self):
         new_interface = CommandInterface()
-    # Deep copy the board
+        # Deep copy the board
         new_interface.board = [row.copy() for row in self.board]
-    # Copy the player
+        # Copy the player
         new_interface.player = self.player
-    # Copy other necessary attributes
+        # Copy other necessary attributes
         new_interface.max_genmove_time = self.max_genmove_time
-        new_interface.zobrist_table = self.zobrist_table 
+        new_interface.zobrist_table = self.zobrist_table
         new_interface.hash_value = self.hash_value
         new_interface.eval_cache = self.eval_cache.copy()
-    
+        new_interface.pattern_dict = self.pattern_dict
+        new_interface.history = self.history.copy()
         return new_interface
 
     # Will continuously receive and execute commands
-    # Commands should return True on success, and False on failure
-    # Every command will print '= 1' or '= -1' at the end of execution to indicate success or failure respectively
     def main_loop(self):
         while True:
-            str = input()
+            try:
+                str = input()
+            except EOFError:
+                break
             if str.split(" ")[0] == "exit":
                 print("= 1\n")
                 return True
@@ -93,12 +127,11 @@ class CommandInterface:
                 print("= 1\n")
 
     # Will make sure there are enough arguments, and that they are valid numbers
-    # Not necessary for commands without arguments
     def arg_check(self, args, template):
         converted_args = []
         if len(args) < len(template.split(" ")):
             print("Not enough arguments.\nExpected arguments:", template, file=sys.stderr)
-            print("Recieved arguments: ", end="", file=sys.stderr)
+            print("Received arguments: ", end="", file=sys.stderr)
             for a in args:
                 print(a, end=" ", file=sys.stderr)
             print(file=sys.stderr)
@@ -138,7 +171,7 @@ class CommandInterface:
         self.hash_value = 0
         self.transposition_table = {}
         self.history = []
-        
+
         # Initialize new Zobrist table
         self.initialize_zobrist_hash()
         return True
@@ -219,7 +252,7 @@ class CommandInterface:
             print("= illegal move: " + " ".join(args) + " " + reason + "\n")
             return False
         self.board[y][x] = num
-        self.update_zobrist_hash(y, x, num)
+        self.update_zobrist_hash(x, y, num)
         self.history.append((y, x, num))
         if self.player == 1:
             self.player = 2
@@ -269,108 +302,91 @@ class CommandInterface:
     # VVVVVVVVVV Start of Assignment 4 functions. Add/modify as needed. VVVVVVVV
     # ===============================================================================================
 
+    # Set opponent command
+    def set_opponent(self, args):
+        if len(args) != 1:
+            print("Error: set_opponent requires one argument (the opponent's script filename).", file=sys.stderr)
+            return False
+        self.opponent_script = args[0]
+        return True
 
-    def rotate_pattern(self, pattern, angle):
-        """Rotate pattern by the specified angle (90, 180, 270 degrees)."""
-        if angle == 180:
-            return pattern[::-1]  # Simple reverse for 180°
-        if angle == 90 or angle == 270:
-            return ''.join([pattern[i] for i in (4, 2, 0, 3, 1)])  # Rotations for 90° and 270°
-        return pattern
+    # Set student as player command
+    def set_student_as_player(self, args):
+        if len(args) != 1 or args[0] not in ['1', '2']:
+            print("Error: set_student_as_player requires one argument (1 or 2).", file=sys.stderr)
+            return False
+        self.student_player_num = int(args[0])
+        return True
 
-    def get_board_pattern(self, x, y, direction):
-        """Helper function to extract a row or column pattern based on the direction (row or column)."""
-        n, m = len(self.board[0]), len(self.board)
-        pattern = ""
-        if direction == "row":
-            for i in range(x - 2, x + 3):
-                if 0 <= i < n:
-                    pattern += "." if self.board[y][i] is None else str(self.board[y][i])
+    # Play game command
+    def play_game(self, args):
+        # Check if opponent and student player number are set
+        if not hasattr(self, 'opponent_script'):
+            print("Error: Opponent script not set. Use set_opponent command.", file=sys.stderr)
+            return False
+        if not hasattr(self, 'student_player_num'):
+            print("Error: Student player number not set. Use set_student_as_player command.", file=sys.stderr)
+            return False
+
+        import subprocess
+
+        # Start the opponent process
+        opponent_process = subprocess.Popen(
+            ['python3', self.opponent_script],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1
+        )
+
+        current_player = 1
+        game_over = False
+
+        while not game_over:
+            if current_player == self.student_player_num:
+                # Your player's turn
+                move = self.genmove([])
+                if move == "resign":
+                    opponent_process.stdin.write("resign\n")
+                    opponent_process.stdin.flush()
+                    winner = 3 - self.student_player_num
+                    print(winner)
+                    game_over = True
                 else:
-                    pattern += "X"
-        elif direction == "column":
-            for j in range(y - 2, y + 3):
-                if 0 <= j < m:
-                    pattern += "." if self.board[j][x] is None else str(self.board[j][x])
+                    # Apply your move
+                    self.play(move.strip().split())
+                    # Send your move to the opponent
+                    opponent_process.stdin.write(f"play {move}\n")
+                    opponent_process.stdin.flush()
+            else:
+                # Opponent's turn
+                opponent_process.stdin.write("genmove\n")
+                opponent_process.stdin.flush()
+
+                # Read opponent's move
+                opponent_move = opponent_process.stdout.readline().strip()
+                if opponent_move == "resign":
+                    winner = self.student_player_num
+                    print(winner)
+                    game_over = True
                 else:
-                    pattern += "X"
-        return pattern
+                    # Apply opponent's move
+                    self.play(opponent_move.strip().split())
+                    # Send the move back to the opponent to keep game states in sync
+                    opponent_process.stdin.write(f"play {opponent_move}\n")
+                    opponent_process.stdin.flush()
 
-    def calculate_move_weight(self, x, y, num):
-        """Calculate the weight of a move at (x, y) for 'num' (0 or 1)."""
-        row_pattern = self.get_board_pattern(x, y, "row")
-        col_pattern = self.get_board_pattern(x, y, "column")
-        
-        # Evaluate the board with pattern rotations
-        weights = []
-        for angle in [0, 90, 180, 270]:
-            rotated_row_pattern = self.rotate_pattern(row_pattern, angle)
-            rotated_col_pattern = self.rotate_pattern(col_pattern, angle)
-            # Higher weight if the move creates a favorable pattern
-            row_weight = self.pattern_dict.get((rotated_row_pattern, num), 10)
-            col_weight = self.pattern_dict.get((rotated_col_pattern, num), 10)
-            weights.append(row_weight + col_weight)
-        
-        return max(weights)  # Return the highest weight as an evaluation metric
+            # Check for game over
+            if self.is_terminal():
+                winner = 3 - current_player
+                print(winner)
+                game_over = True
 
-    # Evaluate Balance Function
-    def evaluate_balance(self, zeros, ones, total_length):
-        balance = abs(zeros - ones)
-        max_balance = total_length // 2
-        return (max_balance - balance) ** 2
+            current_player = 3 - current_player  # Switch player
 
-    # Board Evaluation Function
-    def evaluate_board(self):
-        # Using Zobrist hashing to cache the board evaluations for quicker lookup
-        if self.hash_value in self.eval_cache:
-            return self.eval_cache[self.hash_value]
-
-        score = 0
-
-        # Evaluate rows for balance, three-in-a-row, and control
-        for row in self.board:
-            zeros = sum(1 for x in row if x == 0)
-            ones = sum(1 for x in row if x == 1)
-            score += self.evaluate_balance(zeros, ones, len(row))
-
-            # Penalize three consecutive same values
-            for i in range(len(row) - 2):
-                if row[i] == row[i + 1] == row[i + 2] and row[i] is not None:
-                    score -= 5 * (len(self.board) - i)
-
-        # Evaluate columns similarly
-        for col in range(len(self.board[0])):
-            zeros = ones = 0
-            for row in range(len(self.board)):
-                if self.board[row][col] == 0:
-                    zeros += 1
-                elif self.board[row][col] == 1:
-                    ones += 1
-
-            score += self.evaluate_balance(zeros, ones, len(self.board))
-
-            # Penalize three consecutive same values in columns
-            for i in range(len(self.board) - 2):
-                if self.board[i][col] == self.board[i + 1][col] == self.board[i + 2][col] and self.board[i][col] is not None:
-                    score -= 5 * (len(self.board) - i)
-
-        # Reward center control
-        center_x, center_y = len(self.board[0]) // 2, len(self.board) // 2
-        if self.board[center_y][center_x] is not None:
-            score += 10
-
-        # Add heuristic for potential two-in-a-row
-        for row in self.board:
-            for i in range(len(row) - 1):
-                if row[i] == row[i + 1] and row[i] is not None:
-                    score += 3
-
-        # Invert score if it's the opponent's turn
-        if self.player != 1:
-            score = -score
-
-        self.eval_cache[self.hash_value] = score
-        return score
+        opponent_process.terminate()
+        return True
 
     # MCTS Integration with Pattern-Based Enhancements
     def genmove(self, args):
@@ -381,7 +397,7 @@ class CommandInterface:
                 print("resign")
                 return "resign"
 
-            best_move = mcts(self, itermax=10000)  # Adjust itermax as needed
+            best_move = mcts(self, itermax=1000)  # Adjust itermax as needed
 
             if best_move:
                 self.perform_move(best_move)
@@ -403,13 +419,12 @@ class CommandInterface:
             print("resign")
             return "resign"
 
-
     # Additional Helper Functions (Zobrist, Board Handling)
     def initialize_zobrist_hash(self):
         row_range = len(self.board)
         col_range = len(self.board[0])
-        for x in range(row_range):
-            for y in range(col_range):
+        for x in range(col_range):
+            for y in range(row_range):
                 self.zobrist_table[(x, y)] = [random.getrandbits(64) for _ in range(2)]
 
     def update_zobrist_hash(self, x, y, piece):
@@ -417,10 +432,15 @@ class CommandInterface:
 
     def perform_move(self, move):
         x, y, num = int(move[0]), int(move[1]), int(move[2])
+        legal, reason = self.is_legal(x, y, num)
+        if not legal:
+            print(f"Attempted to perform illegal move: {move} Reason: {reason}", file=sys.stderr)
+            return False
         self.board[y][x] = num
         self.update_zobrist_hash(x, y, num)
         self.history.append((y, x, num))
         self.player = 2 if self.player == 1 else 1
+        return True
 
     # Terminal Check Function
     def is_terminal(self):
@@ -431,6 +451,67 @@ class CommandInterface:
         if self.is_terminal():
             return -1 if self.player == player_num else 1
         return 0
+
+    # Calculate Move Weight with Dynamic Patterns
+    def calculate_move_weight(self, x, y, num):
+        """Calculate the weight of a move at (x, y) for 'num' (0 or 1)."""
+        weight = 0
+
+        # Place the number temporarily
+        self.board[y][x] = num
+
+        player_num = num
+        opponent_num = 1 - num
+
+        # Function to map cell values to symbols
+        def cell_to_symbol(cell):
+            if cell is None:
+                return '.'
+            elif cell == player_num:
+                return 'P'
+            elif cell == opponent_num:
+                return 'O'
+            else:
+                return '?'
+
+        # Extract row and column patterns with symbols
+        row = ''.join([cell_to_symbol(cell) for cell in self.board[y]])
+        col = ''.join([cell_to_symbol(self.board[i][x]) for i in range(len(self.board))])
+
+        # Check for patterns in the row
+        for i in range(len(row) - 2):
+            pattern = row[i:i+3]
+            pattern_tuple = (pattern,)
+            if pattern_tuple in self.pattern_dict:
+                weight += self.pattern_dict[pattern_tuple]
+
+        # Check for patterns in the column
+        for i in range(len(col) - 2):
+            pattern = col[i:i+3]
+            pattern_tuple = (pattern,)
+            if pattern_tuple in self.pattern_dict:
+                weight += self.pattern_dict[pattern_tuple]
+
+        # Additional heuristics: balance the number of player's symbols and opponent's in the row and column
+        row_player = row.count('P')
+        row_opponent = row.count('O')
+        col_player = col.count('P')
+        col_opponent = col.count('O')
+
+        # Penalize imbalance
+        weight -= abs(row_player - row_opponent) * 5
+        weight -= abs(col_player - col_opponent) * 5
+
+        # Reward moves that lead to balance
+        if abs((row_player + 1) - row_opponent) < abs(row_player - row_opponent):
+            weight += 10
+        if abs((col_player + 1) - col_opponent) < abs(col_player - col_opponent):
+            weight += 10
+
+        # Remove the number after evaluation
+        self.board[y][x] = None
+
+        return weight
 
 # MCTSNode class with Pattern-Based Enhancements
 class MCTSNode:
@@ -505,10 +586,9 @@ def mcts(initial_state, itermax, exploration_weight=1.41):
     else:
         return None
 
-
 def rollout(state):
     current_state = state.copy()
-    while not current_state.is_terminal():  # Stop rolling out if terminal state
+    while not current_state.is_terminal():
         # Calculate weights of moves based on patterns
         weighted_moves = []
         moves = current_state.get_legal_moves()
@@ -535,11 +615,11 @@ def evaluate_winner(state):
         return 0  # Game not finished
     return 1 if state.player == 2 else -1  # Current player loses
 
-    # ===============================================================================================
-    # ɅɅɅɅɅɅɅɅɅɅ End of Assignment 4 functions. ɅɅɅɅɅɅɅɅɅɅ
-    # ===============================================================================================
-
+# ===============================================================================================
+# ɅɅɅɅɅɅɅɅɅɅ End of Assignment 4 functions. ɅɅɅɅɅɅɅɅɅɅ
+# ===============================================================================================
 
 if __name__ == "__main__":
     interface = CommandInterface()
     interface.main_loop()
+
